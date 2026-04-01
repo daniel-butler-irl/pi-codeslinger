@@ -186,10 +186,114 @@ export function createAskDialog(
     return lines;
   }
 
+  function allAnswered(): boolean {
+    return questions.every((q) => {
+      const a = state.answers[q.id];
+      if (q.type === "multi") return (a as string[]).length > 0;
+      return (a as string) !== "";
+    });
+  }
+
   function handleInput(data: string): void {
-    // stub — implemented in Task 3
-    if (matchesKey(data, Key.escape) && !state.inputMode) {
+    const q = questions[state.currentQuestion];
+
+    // --- Text input mode ---
+    if (state.inputMode) {
+      if (matchesKey(data, Key.escape)) {
+        state.inputMode = false;
+        state.inputBuffer = "";
+        refresh();
+        return;
+      }
+      if (matchesKey(data, Key.enter)) {
+        if (state.inputBuffer.trim() !== "") {
+          state.answers[q.id] = state.inputBuffer.trim();
+          state.inputMode = false;
+          state.inputBuffer = "";
+          refresh();
+        }
+        return;
+      }
+      if (matchesKey(data, Key.backspace)) {
+        state.inputBuffer = state.inputBuffer.slice(0, -1);
+        refresh();
+        return;
+      }
+      // Printable character
+      if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        state.inputBuffer += data;
+        refresh();
+      }
+      return;
+    }
+
+    // --- Normal mode ---
+
+    // Dismiss
+    if (matchesKey(data, Key.escape)) {
       done({ cancelled: true, reason: "User dismissed the question dialog" });
+      return;
+    }
+
+    // Cycle questions
+    if (matchesKey(data, Key.left)) {
+      state.currentQuestion = (state.currentQuestion - 1 + questions.length) % questions.length;
+      state.cursor = 0;
+      refresh();
+      return;
+    }
+    if (matchesKey(data, Key.right)) {
+      state.currentQuestion = (state.currentQuestion + 1) % questions.length;
+      state.cursor = 0;
+      refresh();
+      return;
+    }
+
+    const opts = q.options ?? [];
+
+    // Navigate options
+    if (matchesKey(data, Key.up)) {
+      state.cursor = Math.max(0, state.cursor - 1);
+      refresh();
+      return;
+    }
+    if (matchesKey(data, Key.down)) {
+      state.cursor = Math.min(opts.length - 1, state.cursor + 1);
+      refresh();
+      return;
+    }
+
+    // Toggle multi
+    if (matchesKey(data, Key.space) && q.type === "multi" && opts.length > 0) {
+      const current = state.answers[q.id] as string[];
+      const opt = opts[state.cursor];
+      if (current.includes(opt)) {
+        state.answers[q.id] = current.filter((v) => v !== opt);
+      } else {
+        state.answers[q.id] = [...current, opt];
+      }
+      refresh();
+      return;
+    }
+
+    // Enter — select (single), activate text input, or submit if all answered
+    if (matchesKey(data, Key.enter)) {
+      if (q.type === "single" && opts.length > 0 && state.cursor < opts.length) {
+        state.answers[q.id] = opts[state.cursor];
+        refresh();
+        return;
+      }
+      if (q.type === "text" || (opts.length > 0 && state.cursor >= opts.length) || opts.length === 0) {
+        state.inputMode = true;
+        state.inputBuffer = typeof state.answers[q.id] === "string" ? (state.answers[q.id] as string) : "";
+        refresh();
+        return;
+      }
+      // All answered → submit
+      if (allAnswered()) {
+        done({ cancelled: false, answers: state.answers });
+      }
+      return;
     }
   }
 
