@@ -1,0 +1,15 @@
+{
+    "name": "pi-codeslinger",
+    "version": "1.0.0",
+    "keywords": ["pi-package"],
+    "dependencies": {
+        "@tmustier/pi-files-widget": "0.1.15"
+    },
+    "bundledDependencies": ["@tmustier/pi-files-widget"],
+    "pi": {
+        "extensions": ["./extensions/ask/index.ts", "./node_modules/@tmustier/pi-files-widget/index.ts"],
+        "skills": ["./skills"],
+        "prompts": ["./prompts"],
+        "themes": ["./themes"]
+    }
+}
