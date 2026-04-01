@@ -29,3 +29,15 @@ In-terminal file browser and viewer. Navigate your project tree, view files with
 | `/readfiles` | Open the interactive file browser |
 | `/review` | Code review workflow (requires `brew install agavra/tap/tuicr`) |
 | `/diff` | View diffs (requires `brew install oven-sh/bun/bun`) |
+
+### ask_user
+
+A blocking question dialog. When the agent needs clarification or a decision, it calls `ask_user` with a list of typed questions. A centered dialog overlay appears in the terminal — navigate with arrow keys, toggle multi-select with space, or type a custom answer. The agent waits until all questions are answered or the dialog is dismissed (`esc`).
+
+**Question types:**
+
+| Type | Behaviour |
+|---|---|
+| `single` | Select one option from a list |
+| `multi` | Toggle multiple options with space |
+| `text` | Free-text input (with optional suggestions) |
