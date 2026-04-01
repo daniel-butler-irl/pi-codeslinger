@@ -126,7 +126,7 @@ export function createAskDialog(
       const label = truncateToWidth(opts[i], innerWidth - 6);
       const row = indicator + (isCursor ? theme.bold(theme.fg("text", label)) : theme.fg("text", label));
       const bg = isCursor && !state.inputMode ? theme.bg("selectedBg", row) : row;
-      const padded = bg + " ".repeat(Math.max(0, innerWidth - visibleWidth(indicator) - visibleWidth(label)));
+      const padded = bg + " ".repeat(Math.max(0, innerWidth - 2 - visibleWidth(indicator) - visibleWidth(label)));
       lines.push(theme.fg("borderAccent", "║") + "  " + padded + theme.fg("borderAccent", "║"));
     }
 
@@ -140,9 +140,9 @@ export function createAskDialog(
       : " ".repeat(boxWidth);
     const pad = " ".repeat(Math.max(0, boxWidth - visibleWidth(buf)));
     return [
-      theme.fg("borderAccent", "║") + "  " + theme.fg("border", "┌" + "─".repeat(boxWidth) + "┐") + "  " + theme.fg("borderAccent", "║"),
-      theme.fg("borderAccent", "║") + "  " + theme.fg("border", "│") + theme.fg("text", buf + pad) + theme.fg("border", "│") + "  " + theme.fg("borderAccent", "║"),
-      theme.fg("borderAccent", "║") + "  " + theme.fg("border", "└" + "─".repeat(boxWidth) + "┘") + "  " + theme.fg("borderAccent", "║"),
+      theme.fg("borderAccent", "║") + "  " + theme.fg("border", "┌" + "─".repeat(boxWidth) + "┐") + theme.fg("borderAccent", "║"),
+      theme.fg("borderAccent", "║") + "  " + theme.fg("border", "│") + theme.fg("text", buf + pad) + theme.fg("border", "│") + theme.fg("borderAccent", "║"),
+      theme.fg("borderAccent", "║") + "  " + theme.fg("border", "└" + "─".repeat(boxWidth) + "┘") + theme.fg("borderAccent", "║"),
     ];
   }
 
