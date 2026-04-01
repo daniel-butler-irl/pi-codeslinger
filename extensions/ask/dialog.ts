@@ -41,13 +41,16 @@ export function createAskDialog(
   theme: Theme,
   done: (result: DialogOutcome) => void,
 ): Component {
+  const firstQ = questions[0];
+  const startsInInputMode = firstQ?.type === "text" && (!firstQ.options || firstQ.options.length === 0);
+
   const state: DialogState = {
     currentQuestion: 0,
     answers: Object.fromEntries(
       questions.map((q) => [q.id, q.type === "multi" ? [] : ""])
     ),
     cursor: 0,
-    inputMode: false,
+    inputMode: startsInInputMode,
     inputBuffer: "",
     addendumMode: false,
     addendumBuffer: "",
@@ -58,6 +61,10 @@ export function createAskDialog(
   function refresh() {
     cachedLines = undefined;
     tui.requestRender();
+  }
+
+  function isTextOnly(q: Question): boolean {
+    return q.type === "text" && (!q.options || q.options.length === 0);
   }
 
   function answeredCount(): number {
@@ -292,12 +299,16 @@ export function createAskDialog(
       if (matchesKey(data, Key.left)) {
         state.currentQuestion = (state.currentQuestion - 1 + questions.length) % questions.length;
         state.cursor = 0;
+        state.inputMode = isTextOnly(questions[state.currentQuestion]);
+        state.inputBuffer = state.inputMode ? (state.answers[questions[state.currentQuestion].id] as string) : "";
         refresh();
         return;
       }
       if (matchesKey(data, Key.right)) {
         state.currentQuestion = (state.currentQuestion + 1) % questions.length;
         state.cursor = 0;
+        state.inputMode = isTextOnly(questions[state.currentQuestion]);
+        state.inputBuffer = state.inputMode ? (state.answers[questions[state.currentQuestion].id] as string) : "";
         refresh();
         return;
       }
@@ -359,6 +370,8 @@ export function createAskDialog(
         if (nextUnanswered !== -1) {
           state.currentQuestion = nextUnanswered;
           state.cursor = 0;
+          state.inputMode = isTextOnly(questions[nextUnanswered]);
+          state.inputBuffer = state.inputMode ? (state.answers[questions[nextUnanswered].id] as string) : "";
         }
         refresh();
         // Submit if all questions are now answered
