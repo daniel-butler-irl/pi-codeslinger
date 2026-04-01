@@ -67,7 +67,7 @@ export function createAskDialog(
   function renderTitleBar(width: number): string {
     const title = " Agent Questions";
     const counter = ` [${answeredCount()} of ${questions.length}]  ↔ `;
-    const gap = width - visibleWidth(title) - visibleWidth(counter);
+    const gap = width - 2 - visibleWidth(title) - visibleWidth(counter);
     const spacer = gap > 0 ? " ".repeat(gap) : "";
     return (
       theme.fg("borderAccent", "║") +
