@@ -236,17 +236,19 @@ export function createAskDialog(
     }
 
     // Cycle questions
-    if (matchesKey(data, Key.left)) {
-      state.currentQuestion = (state.currentQuestion - 1 + questions.length) % questions.length;
-      state.cursor = 0;
-      refresh();
-      return;
-    }
-    if (matchesKey(data, Key.right)) {
-      state.currentQuestion = (state.currentQuestion + 1) % questions.length;
-      state.cursor = 0;
-      refresh();
-      return;
+    if (questions.length > 1) {
+      if (matchesKey(data, Key.left)) {
+        state.currentQuestion = (state.currentQuestion - 1 + questions.length) % questions.length;
+        state.cursor = 0;
+        refresh();
+        return;
+      }
+      if (matchesKey(data, Key.right)) {
+        state.currentQuestion = (state.currentQuestion + 1) % questions.length;
+        state.cursor = 0;
+        refresh();
+        return;
+      }
     }
 
     const opts = q.options ?? [];
@@ -283,7 +285,7 @@ export function createAskDialog(
         refresh();
         return;
       }
-      if (q.type === "text" || (opts.length > 0 && state.cursor >= opts.length) || opts.length === 0) {
+      if (q.type === "text" || opts.length === 0) {
         state.inputMode = true;
         state.inputBuffer = typeof state.answers[q.id] === "string" ? (state.answers[q.id] as string) : "";
         refresh();
