@@ -31,6 +31,8 @@ interface DialogState {
   cursor: number;
   inputMode: boolean;
   inputBuffer: string;
+  addendumMode: boolean;
+  addendumBuffer: string;
 }
 
 export function createAskDialog(
@@ -47,6 +49,8 @@ export function createAskDialog(
     cursor: 0,
     inputMode: false,
     inputBuffer: "",
+    addendumMode: false,
+    addendumBuffer: "",
   };
 
   let cachedLines: string[] | undefined;
@@ -89,12 +93,14 @@ export function createAskDialog(
   function renderStatusBar(width: number): string {
     const q = questions[state.currentQuestion];
     let hints: string;
-    if (state.inputMode) {
+    if (state.addendumMode) {
+      hints = " type addendum · esc cancel · enter confirm";
+    } else if (state.inputMode) {
       hints = " type answer · esc cancel · enter confirm";
     } else if (q.type === "multi") {
-      hints = " ↑↓ navigate · space toggle · enter custom · ← → cycle · enter to submit";
+      hints = " ↑↓ navigate · space toggle · tab addendum · ← → cycle · enter to submit";
     } else {
-      hints = " ↑↓ select · enter custom answer · ← → cycle questions · enter to confirm";
+      hints = " ↑↓ select · tab addendum · enter confirm · ← → cycle questions";
     }
     const inner = truncateToWidth(hints, width - 2);
     const pad = " ".repeat(Math.max(0, width - 2 - visibleWidth(inner)));
@@ -125,9 +131,19 @@ export function createAskDialog(
 
       const label = truncateToWidth(opts[i], innerWidth - 6);
       const row = indicator + (isCursor ? theme.bold(theme.fg("text", label)) : theme.fg("text", label));
-      const bg = isCursor && !state.inputMode ? theme.bg("selectedBg", row) : row;
+      const bg = isCursor && !state.inputMode && !state.addendumMode ? theme.bg("selectedBg", row) : row;
       const padded = bg + " ".repeat(Math.max(0, innerWidth - 2 - visibleWidth(indicator) - visibleWidth(label)));
       lines.push(theme.fg("borderAccent", "║") + "  " + padded + theme.fg("borderAccent", "║"));
+
+      // Addendum box beneath the highlighted option
+      if (isCursor && state.addendumMode) {
+        const boxWidth = innerWidth - 8;
+        const buf = truncateToWidth(state.addendumBuffer + "█", boxWidth);
+        const pad = " ".repeat(Math.max(0, boxWidth - visibleWidth(buf)));
+        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "┌" + "─".repeat(boxWidth) + "┐") + "  " + theme.fg("borderAccent", "║"));
+        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "│") + theme.fg("text", buf + pad) + theme.fg("border", "│") + "  " + theme.fg("borderAccent", "║"));
+        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "└" + "─".repeat(boxWidth) + "┘") + "  " + theme.fg("borderAccent", "║"));
+      }
     }
 
     return lines;
@@ -227,6 +243,41 @@ export function createAskDialog(
       return;
     }
 
+    // --- Addendum mode ---
+    if (state.addendumMode) {
+      if (matchesKey(data, Key.escape)) {
+        state.addendumMode = false;
+        state.addendumBuffer = "";
+        refresh();
+        return;
+      }
+      if (matchesKey(data, Key.enter)) {
+        if (state.addendumBuffer.trim() !== "") {
+          const q = questions[state.currentQuestion];
+          const opts = q.options ?? [];
+          const base = opts[state.cursor];
+          state.answers[q.id] = `${base}: ${state.addendumBuffer.trim()}`;
+        }
+        state.addendumMode = false;
+        state.addendumBuffer = "";
+        refresh();
+        if (allAnswered()) {
+          done({ cancelled: false, answers: state.answers });
+        }
+        return;
+      }
+      if (matchesKey(data, Key.backspace)) {
+        state.addendumBuffer = state.addendumBuffer.slice(0, -1);
+        refresh();
+        return;
+      }
+      if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        state.addendumBuffer += data;
+        refresh();
+      }
+      return;
+    }
+
     // --- Normal mode ---
 
     // Dismiss
@@ -278,6 +329,14 @@ export function createAskDialog(
       } else {
         state.answers[q.id] = [...current, opt];
       }
+      refresh();
+      return;
+    }
+
+    // Tab — open addendum box beneath highlighted option
+    if (matchesKey(data, Key.tab) && opts.length > 0 && state.cursor < opts.length) {
+      state.addendumMode = true;
+      state.addendumBuffer = "";
       refresh();
       return;
     }

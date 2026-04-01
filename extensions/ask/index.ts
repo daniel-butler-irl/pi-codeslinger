@@ -12,7 +12,9 @@ export default function (pi: ExtensionAPI) {
     promptGuidelines: [
       "Use ask_user when you need information from the user before proceeding.",
       "Each question must have a unique id.",
-      "Use type 'single' for one choice, 'multi' for multiple selections, 'text' for free input.",
+      "Use type 'single' when the user must pick exactly one option from a fixed list — always provide options.",
+      "Use type 'multi' when the user may select multiple options from a fixed list — always provide options.",
+      "Use type 'text' only for fully open-ended questions with no predefined options. Never combine type 'text' with an options list.",
       "Always handle a cancelled result gracefully.",
     ],
     parameters: Type.Object({
