@@ -255,13 +255,17 @@ export function createAskDialog(
 
     // Navigate options
     if (matchesKey(data, Key.up)) {
-      state.cursor = Math.max(0, state.cursor - 1);
-      refresh();
+      if (opts.length > 0) {
+        state.cursor = Math.max(0, state.cursor - 1);
+        refresh();
+      }
       return;
     }
     if (matchesKey(data, Key.down)) {
-      state.cursor = Math.min(opts.length - 1, state.cursor + 1);
-      refresh();
+      if (opts.length > 0) {
+        state.cursor = Math.min(opts.length - 1, state.cursor + 1);
+        refresh();
+      }
       return;
     }
 
@@ -293,6 +297,10 @@ export function createAskDialog(
           state.cursor = 0;
         }
         refresh();
+        // Submit if all questions are now answered
+        if (allAnswered()) {
+          done({ cancelled: false, answers: state.answers });
+        }
         return;
       }
       if (q.type === "text" || opts.length === 0) {
