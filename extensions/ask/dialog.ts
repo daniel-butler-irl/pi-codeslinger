@@ -137,12 +137,13 @@ export function createAskDialog(
 
       // Addendum box beneath the highlighted option
       if (isCursor && state.addendumMode) {
-        const boxWidth = innerWidth - 8;
+        // indent(4) + ┌ + boxWidth + ┐ = innerWidth → boxWidth = innerWidth - 6
+        const boxWidth = innerWidth - 6;
         const buf = truncateToWidth(state.addendumBuffer + "█", boxWidth);
         const pad = " ".repeat(Math.max(0, boxWidth - visibleWidth(buf)));
-        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "┌" + "─".repeat(boxWidth) + "┐") + "  " + theme.fg("borderAccent", "║"));
-        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "│") + theme.fg("text", buf + pad) + theme.fg("border", "│") + "  " + theme.fg("borderAccent", "║"));
-        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "└" + "─".repeat(boxWidth) + "┘") + "  " + theme.fg("borderAccent", "║"));
+        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "┌" + "─".repeat(boxWidth) + "┐") + theme.fg("borderAccent", "║"));
+        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "│") + theme.fg("text", buf + pad) + theme.fg("border", "│") + theme.fg("borderAccent", "║"));
+        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "└" + "─".repeat(boxWidth) + "┘") + theme.fg("borderAccent", "║"));
       }
     }
 
@@ -320,21 +321,25 @@ export function createAskDialog(
       return;
     }
 
-    // Toggle multi
-    if (matchesKey(data, Key.space) && q.type === "multi" && opts.length > 0) {
-      const current = state.answers[q.id] as string[];
-      const opt = opts[state.cursor];
-      if (current.includes(opt)) {
-        state.answers[q.id] = current.filter((v) => v !== opt);
-      } else {
-        state.answers[q.id] = [...current, opt];
+    // Space — select single (no advance) or toggle multi
+    if (matchesKey(data, Key.space) && opts.length > 0 && state.cursor < opts.length) {
+      if (q.type === "multi") {
+        const current = state.answers[q.id] as string[];
+        const opt = opts[state.cursor];
+        if (current.includes(opt)) {
+          state.answers[q.id] = current.filter((v) => v !== opt);
+        } else {
+          state.answers[q.id] = [...current, opt];
+        }
+      } else if (q.type === "single") {
+        state.answers[q.id] = opts[state.cursor];
       }
       refresh();
       return;
     }
 
     // Tab — open addendum box beneath highlighted option
-    if (matchesKey(data, Key.tab) && opts.length > 0 && state.cursor < opts.length) {
+    if ((matchesKey(data, Key.tab) || data === "\t") && opts.length > 0 && state.cursor < opts.length) {
       state.addendumMode = true;
       state.addendumBuffer = "";
       refresh();
