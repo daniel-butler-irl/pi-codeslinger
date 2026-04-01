@@ -282,6 +282,16 @@ export function createAskDialog(
     if (matchesKey(data, Key.enter)) {
       if (q.type === "single" && opts.length > 0 && state.cursor < opts.length) {
         state.answers[q.id] = opts[state.cursor];
+        // Auto-advance to next unanswered question
+        const nextUnanswered = questions.findIndex((qq, i) => {
+          if (i <= state.currentQuestion) return false;
+          const a = state.answers[qq.id];
+          return qq.type === "multi" ? (a as string[]).length === 0 : (a as string) === "";
+        });
+        if (nextUnanswered !== -1) {
+          state.currentQuestion = nextUnanswered;
+          state.cursor = 0;
+        }
         refresh();
         return;
       }
