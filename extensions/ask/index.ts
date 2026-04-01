@@ -63,7 +63,7 @@ export default function (pi: ExtensionAPI) {
 
       const outcome = await ctx.ui.custom<DialogOutcome>((tui, theme, _kb, done) => {
         return createAskDialog(questions as Question[], tui, theme, done);
-      });
+      }, { overlay: true });
 
       return {
         content: [{ type: "text", text: JSON.stringify(outcome) }],
