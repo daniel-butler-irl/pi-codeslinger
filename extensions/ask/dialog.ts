@@ -1,4 +1,4 @@
-import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { decodeKittyPrintable, Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { Component } from "@mariozechner/pi-tui";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 
@@ -124,8 +124,13 @@ export function createAskDialog(
 
     for (let i = 0; i < opts.length; i++) {
       const isSelected = (() => {
-        if (q.type === "multi") return (state.answers[q.id] as string[]).includes(opts[i]);
-        return state.answers[q.id] === opts[i];
+        if (q.type === "multi") {
+          return (state.answers[q.id] as string[]).some(
+            (v) => v === opts[i] || v.startsWith(opts[i] + ": ")
+          );
+        }
+        const a = state.answers[q.id] as string;
+        return a === opts[i] || a.startsWith(opts[i] + ": ");
       })();
       const isCursor = state.cursor === i;
 
@@ -210,12 +215,33 @@ export function createAskDialog(
     return lines;
   }
 
+  function isAnswered(q: Question): boolean {
+    const a = state.answers[q.id];
+    if (q.type === "multi") return (a as string[]).length > 0;
+    return (a as string) !== "";
+  }
+
   function allAnswered(): boolean {
-    return questions.every((q) => {
-      const a = state.answers[q.id];
-      if (q.type === "multi") return (a as string[]).length > 0;
-      return (a as string) !== "";
+    return questions.every(isAnswered);
+  }
+
+  /** Advance to the next unanswered question, or submit if all answered. */
+  function advanceOrSubmit(): void {
+    if (allAnswered()) {
+      done({ cancelled: false, answers: state.answers });
+      return;
+    }
+    const nextUnanswered = questions.findIndex((qq, i) => {
+      if (i <= state.currentQuestion) return false;
+      return !isAnswered(qq);
     });
+    if (nextUnanswered !== -1) {
+      state.currentQuestion = nextUnanswered;
+      state.cursor = 0;
+      state.inputMode = isTextOnly(questions[nextUnanswered]);
+      state.inputBuffer = state.inputMode ? (state.answers[questions[nextUnanswered].id] as string) : "";
+    }
+    refresh();
   }
 
   function handleInput(data: string): void {
@@ -234,7 +260,7 @@ export function createAskDialog(
           state.answers[q.id] = state.inputBuffer.trim();
           state.inputMode = false;
           state.inputBuffer = "";
-          refresh();
+          advanceOrSubmit();
         }
         return;
       }
@@ -244,8 +270,9 @@ export function createAskDialog(
         return;
       }
       // Printable character
-      if (data.length === 1 && data.charCodeAt(0) >= 32) {
-        state.inputBuffer += data;
+      const inputChar = decodeKittyPrintable(data) ?? (data.length === 1 && data.charCodeAt(0) >= 32 ? data : undefined);
+      if (inputChar !== undefined) {
+        state.inputBuffer += inputChar;
         refresh();
       }
       return;
@@ -264,14 +291,25 @@ export function createAskDialog(
           const q = questions[state.currentQuestion];
           const opts = q.options ?? [];
           const base = opts[state.cursor];
-          state.answers[q.id] = `${base}: ${state.addendumBuffer.trim()}`;
+          const withAddendum = `${base}: ${state.addendumBuffer.trim()}`;
+          if (q.type === "multi") {
+            const current = state.answers[q.id] as string[];
+            // Replace existing entry for this option, or add it
+            const idx = current.findIndex((v) => v === base || v.startsWith(base + ": "));
+            if (idx !== -1) {
+              const updated = [...current];
+              updated[idx] = withAddendum;
+              state.answers[q.id] = updated;
+            } else {
+              state.answers[q.id] = [...current, withAddendum];
+            }
+          } else {
+            state.answers[q.id] = withAddendum;
+          }
         }
         state.addendumMode = false;
         state.addendumBuffer = "";
-        refresh();
-        if (allAnswered()) {
-          done({ cancelled: false, answers: state.answers });
-        }
+        advanceOrSubmit();
         return;
       }
       if (matchesKey(data, Key.backspace)) {
@@ -279,8 +317,9 @@ export function createAskDialog(
         refresh();
         return;
       }
-      if (data.length === 1 && data.charCodeAt(0) >= 32) {
-        state.addendumBuffer += data;
+      const addendumChar = decodeKittyPrintable(data) ?? (data.length === 1 && data.charCodeAt(0) >= 32 ? data : undefined);
+      if (addendumChar !== undefined) {
+        state.addendumBuffer += addendumChar;
         refresh();
       }
       return;
@@ -337,8 +376,9 @@ export function createAskDialog(
       if (q.type === "multi") {
         const current = state.answers[q.id] as string[];
         const opt = opts[state.cursor];
-        if (current.includes(opt)) {
-          state.answers[q.id] = current.filter((v) => v !== opt);
+        const idx = current.findIndex((v) => v === opt || v.startsWith(opt + ": "));
+        if (idx !== -1) {
+          state.answers[q.id] = current.filter((_, i) => i !== idx);
         } else {
           state.answers[q.id] = [...current, opt];
         }
@@ -357,38 +397,28 @@ export function createAskDialog(
       return;
     }
 
-    // Enter — select (single), activate text input, or submit if all answered
+    // Enter — select (single), confirm multi, activate text input, or submit
     if (matchesKey(data, Key.enter)) {
       if (q.type === "single" && opts.length > 0 && state.cursor < opts.length) {
         state.answers[q.id] = opts[state.cursor];
-        // Auto-advance to next unanswered question
-        const nextUnanswered = questions.findIndex((qq, i) => {
-          if (i <= state.currentQuestion) return false;
-          const a = state.answers[qq.id];
-          return qq.type === "multi" ? (a as string[]).length === 0 : (a as string) === "";
-        });
-        if (nextUnanswered !== -1) {
-          state.currentQuestion = nextUnanswered;
-          state.cursor = 0;
-          state.inputMode = isTextOnly(questions[nextUnanswered]);
-          state.inputBuffer = state.inputMode ? (state.answers[questions[nextUnanswered].id] as string) : "";
-        }
-        refresh();
-        // Submit if all questions are now answered
-        if (allAnswered()) {
-          done({ cancelled: false, answers: state.answers });
+        advanceOrSubmit();
+        return;
+      }
+      if (q.type === "multi" && opts.length > 0) {
+        if (isAnswered(q)) {
+          advanceOrSubmit();
         }
         return;
       }
       if (q.type === "text" || opts.length === 0) {
+        if (allAnswered()) {
+          done({ cancelled: false, answers: state.answers });
+          return;
+        }
         state.inputMode = true;
         state.inputBuffer = typeof state.answers[q.id] === "string" ? (state.answers[q.id] as string) : "";
         refresh();
         return;
-      }
-      // All answered → submit
-      if (allAnswered()) {
-        done({ cancelled: false, answers: state.answers });
       }
       return;
     }
