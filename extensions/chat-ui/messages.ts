@@ -1,7 +1,30 @@
 // extensions/chat-ui/messages.ts
-import { visibleWidth, Markdown } from "@mariozechner/pi-tui";
+import {
+  visibleWidth,
+  Markdown,
+  type MarkdownTheme,
+} from "@mariozechner/pi-tui";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { ChatEntry, ToolResultEntry } from "./store.js";
+
+function toMarkdownTheme(theme: Theme): MarkdownTheme {
+  return {
+    heading: (t) => theme.fg("mdHeading", t),
+    link: (t) => theme.fg("mdLink", t),
+    linkUrl: (t) => theme.fg("mdLinkUrl", t),
+    code: (t) => theme.fg("mdCode", t),
+    codeBlock: (t) => theme.fg("mdCodeBlock", t),
+    codeBlockBorder: (t) => theme.fg("mdCodeBlockBorder", t),
+    quote: (t) => theme.fg("mdQuote", t),
+    quoteBorder: (t) => theme.fg("mdQuoteBorder", t),
+    hr: (t) => theme.fg("mdHr", t),
+    listBullet: (t) => theme.fg("mdListBullet", t),
+    bold: (t) => theme.bold(t),
+    italic: (t) => theme.italic(t),
+    strikethrough: (t) => theme.strikethrough(t),
+    underline: (t) => theme.underline(t),
+  };
+}
 
 function wordWrap(text: string, maxWidth: number): string[] {
   if (!text) return [""];
@@ -47,7 +70,7 @@ export function renderEntry(
     case "assistant": {
       const text = entry.isStreaming ? entry.text + " ▊" : entry.text;
       if (!text.trim()) return [];
-      const md = new Markdown(text, 2, 0, theme as any);
+      const md = new Markdown(text, 2, 0, toMarkdownTheme(theme));
       return md.render(width);
     }
 
