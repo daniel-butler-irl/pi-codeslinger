@@ -86,6 +86,32 @@ export class ChatStore {
     }
   }
 
+  onMessageStart(id: string, message: any): void {
+    if (message.role !== "assistant") return;
+    this.entries.push({ type: "assistant", id, text: "", isStreaming: true });
+  }
+
+  onMessageUpdate(message: any): void {
+    const last = this.entries.findLast((e) => e.type === "assistant") as
+      | AssistantEntry
+      | undefined;
+    if (!last) return;
+    last.text = this.extractText(message.content ?? []);
+  }
+
+  onMessageEnd(message: any): void {
+    const last = this.entries.findLast((e) => e.type === "assistant") as
+      | AssistantEntry
+      | undefined;
+    if (!last) return;
+    last.isStreaming = false;
+    last.text = this.extractText(message.content ?? []);
+  }
+
+  onInput(text: string): void {
+    this.entries.push({ type: "user", id: this.id(), text });
+  }
+
   private seedMessage(id: string, message: any): void {
     if (message.role === "user") {
       const text = this.extractText(message.content);

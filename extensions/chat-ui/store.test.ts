@@ -122,3 +122,50 @@ describe("ChatStore seeding", () => {
     assert.equal(store.entries.length, 0);
   });
 });
+
+describe("ChatStore message events", () => {
+  test("onMessageStart pushes streaming assistant entry", () => {
+    const store = new ChatStore();
+    store.onMessageStart("msg-1", { role: "assistant", content: [] } as any);
+    assert.equal(store.entries.length, 1);
+    assert.equal(store.entries[0].type, "assistant");
+    assert.equal((store.entries[0] as any).isStreaming, true);
+    assert.equal((store.entries[0] as any).text, "");
+  });
+
+  test("onMessageStart ignores non-assistant messages", () => {
+    const store = new ChatStore();
+    store.onMessageStart("msg-1", { role: "user", content: [] } as any);
+    assert.equal(store.entries.length, 0);
+  });
+
+  test("onMessageUpdate replaces last streaming entry text", () => {
+    const store = new ChatStore();
+    store.onMessageStart("msg-1", { role: "assistant", content: [] } as any);
+    store.onMessageUpdate({
+      role: "assistant",
+      content: [{ type: "text", text: "hello" }],
+    } as any);
+    assert.equal((store.entries[0] as any).text, "hello");
+    assert.equal((store.entries[0] as any).isStreaming, true);
+  });
+
+  test("onMessageEnd marks last streaming entry as done", () => {
+    const store = new ChatStore();
+    store.onMessageStart("msg-1", { role: "assistant", content: [] } as any);
+    store.onMessageEnd({
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+    } as any);
+    assert.equal((store.entries[0] as any).isStreaming, false);
+    assert.equal((store.entries[0] as any).text, "done");
+  });
+
+  test("onInput pushes user entry", () => {
+    const store = new ChatStore();
+    store.onInput("hello user");
+    assert.equal(store.entries.length, 1);
+    assert.equal(store.entries[0].type, "user");
+    assert.equal((store.entries[0] as any).text, "hello user");
+  });
+});
