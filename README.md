@@ -2,7 +2,7 @@
 
 > **Under construction** — more extensions and skills coming soon.
 
-A [pi](https://github.com/badlogic/pi-mono) coding agent loadout for intent-driven agentic development.
+A [pi](https://pi.dev/) coding agent loadout for intent-driven agentic development.
 
 ## Install
 
@@ -24,11 +24,11 @@ brew install bat git-delta glow
 
 In-terminal file browser and viewer. Navigate your project tree, view files with syntax highlighting, inspect git diffs, and send inline comments to the agent.
 
-| Command | Description |
-|---|---|
-| `/readfiles` | Open the interactive file browser |
-| `/review` | Code review workflow (requires `brew install agavra/tap/tuicr`) |
-| `/diff` | View diffs (requires `brew install oven-sh/bun/bun`) |
+| Command      | Description                                                     |
+| ------------ | --------------------------------------------------------------- |
+| `/readfiles` | Open the interactive file browser                               |
+| `/review`    | Code review workflow (requires `brew install agavra/tap/tuicr`) |
+| `/diff`      | View diffs (requires `brew install oven-sh/bun/bun`)            |
 
 ### ask_user
 
@@ -36,8 +36,8 @@ A blocking question dialog. When the agent needs clarification or a decision, it
 
 **Question types:**
 
-| Type | Behaviour |
-|---|---|
-| `single` | Select one option from a list |
-| `multi` | Toggle multiple options with space |
-| `text` | Free-text input (with optional suggestions) |
+| Type     | Behaviour                                   |
+| -------- | ------------------------------------------- |
+| `single` | Select one option from a list               |
+| `multi`  | Toggle multiple options with space          |
+| `text`   | Free-text input (with optional suggestions) |
