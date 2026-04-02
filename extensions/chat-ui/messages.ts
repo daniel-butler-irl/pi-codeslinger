@@ -96,8 +96,9 @@ export function renderEntry(
     }
 
     case "compaction": {
-      const fill = "─".repeat(Math.max(0, width - 22));
-      return [dim(`── context compacted ${fill}`)];
+      const prefix = "── context compacted ";
+      const fill = "─".repeat(Math.max(0, width - visibleWidth(prefix)));
+      return [dim(`${prefix}${fill}`)];
     }
 
     case "image": {
