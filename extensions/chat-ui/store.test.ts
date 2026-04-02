@@ -169,3 +169,35 @@ describe("ChatStore message events", () => {
     assert.equal((store.entries[0] as any).text, "hello user");
   });
 });
+
+describe("ChatStore tool events", () => {
+  test("onToolStart pushes running tool_call entry", () => {
+    const store = new ChatStore();
+    store.onToolStart("call-1", "read_file", { path: "foo.ts" });
+    assert.equal(store.entries.length, 1);
+    assert.equal(store.entries[0].type, "tool_call");
+    assert.equal((store.entries[0] as any).toolCallId, "call-1");
+    assert.equal((store.entries[0] as any).toolName, "read_file");
+    assert.equal((store.entries[0] as any).isRunning, true);
+  });
+
+  test("onToolEnd marks tool call done and pushes tool_result", () => {
+    const store = new ChatStore();
+    store.onToolStart("call-1", "read_file", {});
+    store.onToolEnd("call-1", "file contents here", false);
+    assert.equal(store.entries.length, 2);
+    assert.equal(store.entries[0].type, "tool_call");
+    assert.equal((store.entries[0] as any).isRunning, false);
+    assert.equal(store.entries[1].type, "tool_result");
+    assert.equal((store.entries[1] as any).result, "file contents here");
+    assert.equal((store.entries[1] as any).isError, false);
+  });
+
+  test("onToolEnd marks isError on error", () => {
+    const store = new ChatStore();
+    store.onToolStart("call-1", "bash", {});
+    store.onToolEnd("call-1", "command not found", true);
+    assert.equal((store.entries[0] as any).isError, true);
+    assert.equal((store.entries[1] as any).isError, true);
+  });
+});

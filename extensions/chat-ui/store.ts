@@ -112,6 +112,43 @@ export class ChatStore {
     this.entries.push({ type: "user", id: this.id(), text });
   }
 
+  onToolStart(
+    toolCallId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): void {
+    this.entries.push({
+      type: "tool_call",
+      id: this.id(),
+      toolCallId,
+      toolName,
+      args: JSON.stringify(args),
+      isRunning: true,
+      isError: false,
+    });
+  }
+
+  onToolEnd(toolCallId: string, result: any, isError: boolean): void {
+    const call = this.entries.find(
+      (e) =>
+        e.type === "tool_call" &&
+        (e as ToolCallEntry).toolCallId === toolCallId,
+    ) as ToolCallEntry | undefined;
+    if (call) {
+      call.isRunning = false;
+      call.isError = isError;
+    }
+    const resultText =
+      typeof result === "string" ? result : JSON.stringify(result);
+    this.entries.push({
+      type: "tool_result",
+      id: this.id(),
+      toolCallId,
+      result: resultText,
+      isError,
+    });
+  }
+
   private seedMessage(id: string, message: any): void {
     if (message.role === "user") {
       const text = this.extractText(message.content);
