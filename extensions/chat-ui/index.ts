@@ -65,11 +65,25 @@ export default function (pi: ExtensionAPI) {
     const entries = ctx.sessionManager.getEntries();
     store.seedFromEntries(entries as any[]);
 
-    // Launch full-screen custom UI (fire-and-forget — never resolves)
-    ctx.ui.custom((tui, theme, _kb, _done) => {
-      tuiRef = tui;
-      component = new ChatUIComponent(store, tui, theme, pi, ctx.cwd);
-      return component;
-    });
+    // Launch full-screen custom UI as a full-viewport overlay (fire-and-forget — never resolves).
+    // overlay: true + row/col 0, 100% width/height causes our component to composite over Pi's
+    // native chat/header/footer on every frame, giving us true full-screen control.
+    ctx.ui.custom(
+      (tui, theme, _kb, _done) => {
+        tuiRef = tui;
+        component = new ChatUIComponent(store, tui, theme, pi, ctx.cwd);
+        return component;
+      },
+      {
+        overlay: true,
+        overlayOptions: {
+          row: 0,
+          col: 0,
+          width: "100%",
+          maxHeight: "100%",
+          margin: 0,
+        },
+      },
+    );
   });
 }
