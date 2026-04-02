@@ -89,6 +89,7 @@ export class ChatStore {
   onMessageStart(id: string, message: any): void {
     if (message.role !== "assistant") return;
     this.entries.push({ type: "assistant", id, text: "", isStreaming: true });
+    if (this.scrollOffset > 0) this.newLinesWhileScrolled++;
   }
 
   onMessageUpdate(message: any): void {
@@ -110,6 +111,7 @@ export class ChatStore {
 
   onInput(text: string): void {
     this.entries.push({ type: "user", id: this.id(), text });
+    if (this.scrollOffset > 0) this.newLinesWhileScrolled++;
   }
 
   onToolStart(
@@ -126,6 +128,10 @@ export class ChatStore {
       isRunning: true,
       isError: false,
     });
+  }
+
+  resetNewLines(): void {
+    this.newLinesWhileScrolled = 0;
   }
 
   onToolEnd(toolCallId: string, result: any, isError: boolean): void {

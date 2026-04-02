@@ -201,3 +201,27 @@ describe("ChatStore tool events", () => {
     assert.equal((store.entries[1] as any).isError, true);
   });
 });
+
+describe("ChatStore scroll", () => {
+  test("newLinesWhileScrolled increments when scrolled up and new entry added", () => {
+    const store = new ChatStore();
+    store.scrollOffset = 5;
+    store.onInput("new message");
+    assert.ok(store.newLinesWhileScrolled > 0);
+  });
+
+  test("newLinesWhileScrolled stays 0 when pinned to bottom", () => {
+    const store = new ChatStore();
+    store.scrollOffset = 0;
+    store.onInput("new message");
+    assert.equal(store.newLinesWhileScrolled, 0);
+  });
+
+  test("resetNewLines clears counter", () => {
+    const store = new ChatStore();
+    store.scrollOffset = 5;
+    store.onInput("message");
+    store.resetNewLines();
+    assert.equal(store.newLinesWhileScrolled, 0);
+  });
+});
