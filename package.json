@@ -1,15 +1,42 @@
 {
-    "name": "pi-codeslinger",
-    "version": "1.0.0",
-    "keywords": ["pi-package"],
-    "dependencies": {
-        "@tmustier/pi-files-widget": "0.1.15"
-    },
-    "bundledDependencies": ["@tmustier/pi-files-widget"],
-    "pi": {
-        "extensions": ["./extensions/ask/index.ts", "./node_modules/@tmustier/pi-files-widget/index.ts"],
-        "skills": ["./skills"],
-        "prompts": ["./prompts"],
-        "themes": ["./themes"]
-    }
+  "name": "pi-codeslinger",
+  "version": "1.0.0",
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "dependencies": {
+    "@tmustier/pi-files-widget": "0.1.15"
+  },
+  "bundledDependencies": [
+    "@tmustier/pi-files-widget"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/ask/index.ts",
+      "./extensions/chat-ui/index.ts",
+      "./extensions/intent/index.ts",
+      "./node_modules/@tmustier/pi-files-widget/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "themes": [
+      "./themes"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test extensions/**/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.2"
+  },
+  "bundleDependencies": [
+    "@tmustier/pi-files-widget"
+  ]
 }

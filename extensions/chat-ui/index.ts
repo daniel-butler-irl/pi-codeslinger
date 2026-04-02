@@ -1,0 +1,6 @@
+// extensions/chat-ui/index.ts
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+export default function (_pi: ExtensionAPI) {
+  // TODO: implement
+}

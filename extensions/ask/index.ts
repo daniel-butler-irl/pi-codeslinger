@@ -20,20 +20,29 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       questions: Type.Array(
         Type.Object({
-          id: Type.String({ description: "Unique key for this question's answer" }),
+          id: Type.String({
+            description: "Unique key for this question's answer",
+          }),
           text: Type.String({ description: "The question to display" }),
-          type: Type.Union([
-            Type.Literal("single"),
-            Type.Literal("multi"),
-            Type.Literal("text"),
-          ], { description: "Question type: single choice, multi select, or free text" }),
+          type: Type.Union(
+            [
+              Type.Literal("single"),
+              Type.Literal("multi"),
+              Type.Literal("text"),
+            ],
+            {
+              description:
+                "Question type: single choice, multi select, or free text",
+            },
+          ),
           options: Type.Optional(
             Type.Array(Type.String(), {
-              description: "Choices for single/multi. Optional suggestions for text.",
-            })
+              description:
+                "Choices for single/multi. Optional suggestions for text.",
+            }),
           ),
         }),
-        { minItems: 0 }
+        { minItems: 0 },
       ),
     }),
 
@@ -43,27 +52,43 @@ export default function (pi: ExtensionAPI) {
       // Empty array — return immediately
       if (questions.length === 0) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ cancelled: false, answers: {} }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ cancelled: false, answers: {} }),
+            },
+          ],
           details: { cancelled: false, answers: {} } as DialogOutcome,
         };
       }
 
       // Validate: single/multi must have options
       for (const q of questions) {
-        if ((q.type === "single" || q.type === "multi") && (!q.options || q.options.length === 0)) {
+        if (
+          (q.type === "single" || q.type === "multi") &&
+          (!q.options || q.options.length === 0)
+        ) {
           return {
-            content: [{
-              type: "text",
-              text: `Error: question "${q.id}" has type "${q.type}" but no options provided.`,
-            }],
-            details: { cancelled: true, reason: "Invalid question definition" } as DialogOutcome,
+            content: [
+              {
+                type: "text",
+                text: `Error: question "${q.id}" has type "${q.type}" but no options provided.`,
+              },
+            ],
+            details: {
+              cancelled: true,
+              reason: "Invalid question definition",
+            } as DialogOutcome,
           };
         }
       }
 
-      const outcome = await ctx.ui.custom<DialogOutcome>((tui, theme, _kb, done) => {
-        return createAskDialog(questions as Question[], tui, theme, done);
-      }, { overlay: true });
+      const outcome = await ctx.ui.custom<DialogOutcome>(
+        (tui, theme, _kb, done) => {
+          return createAskDialog(questions as Question[], tui, theme, done);
+        },
+        { overlay: true },
+      );
 
       return {
         content: [{ type: "text", text: JSON.stringify(outcome) }],

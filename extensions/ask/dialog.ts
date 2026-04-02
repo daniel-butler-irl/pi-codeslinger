@@ -1,4 +1,10 @@
-import { decodeKittyPrintable, Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import {
+  decodeKittyPrintable,
+  Key,
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+} from "@mariozechner/pi-tui";
 import type { Component } from "@mariozechner/pi-tui";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 
@@ -42,12 +48,13 @@ export function createAskDialog(
   done: (result: DialogOutcome) => void,
 ): Component {
   const firstQ = questions[0];
-  const startsInInputMode = firstQ?.type === "text" && (!firstQ.options || firstQ.options.length === 0);
+  const startsInInputMode =
+    firstQ?.type === "text" && (!firstQ.options || firstQ.options.length === 0);
 
   const state: DialogState = {
     currentQuestion: 0,
     answers: Object.fromEntries(
-      questions.map((q) => [q.id, q.type === "multi" ? [] : ""])
+      questions.map((q) => [q.id, q.type === "multi" ? [] : ""]),
     ),
     cursor: 0,
     inputMode: startsInInputMode,
@@ -105,7 +112,8 @@ export function createAskDialog(
     } else if (state.inputMode) {
       hints = " type answer · esc cancel · enter confirm";
     } else if (q.type === "multi") {
-      hints = " ↑↓ navigate · space toggle · tab addendum · ← → cycle · enter to submit";
+      hints =
+        " ↑↓ navigate · space toggle · tab addendum · ← → cycle · enter to submit";
     } else {
       hints = " ↑↓ select · tab addendum · enter confirm · ← → cycle questions";
     }
@@ -126,7 +134,7 @@ export function createAskDialog(
       const isSelected = (() => {
         if (q.type === "multi") {
           return (state.answers[q.id] as string[]).some(
-            (v) => v === opts[i] || v.startsWith(opts[i] + ": ")
+            (v) => v === opts[i] || v.startsWith(opts[i] + ": "),
           );
         }
         const a = state.answers[q.id] as string;
@@ -136,16 +144,39 @@ export function createAskDialog(
 
       let indicator: string;
       if (q.type === "multi") {
-        indicator = isSelected ? theme.fg("accent", "  ☑  ") : theme.fg("muted", "  ☐  ");
+        indicator = isSelected
+          ? theme.fg("accent", "  ☑  ")
+          : theme.fg("muted", "  ☐  ");
       } else {
-        indicator = isSelected ? theme.fg("accent", "  ●  ") : theme.fg("muted", "  ○  ");
+        indicator = isSelected
+          ? theme.fg("accent", "  ●  ")
+          : theme.fg("muted", "  ○  ");
       }
 
       const label = truncateToWidth(opts[i], innerWidth - 6);
-      const row = indicator + (isCursor ? theme.bold(theme.fg("text", label)) : theme.fg("text", label));
-      const bg = isCursor && !state.inputMode && !state.addendumMode ? theme.bg("selectedBg", row) : row;
-      const padded = bg + " ".repeat(Math.max(0, innerWidth - 2 - visibleWidth(indicator) - visibleWidth(label)));
-      lines.push(theme.fg("borderAccent", "║") + "  " + padded + theme.fg("borderAccent", "║"));
+      const row =
+        indicator +
+        (isCursor
+          ? theme.bold(theme.fg("text", label))
+          : theme.fg("text", label));
+      const bg =
+        isCursor && !state.inputMode && !state.addendumMode
+          ? theme.bg("selectedBg", row)
+          : row;
+      const padded =
+        bg +
+        " ".repeat(
+          Math.max(
+            0,
+            innerWidth - 2 - visibleWidth(indicator) - visibleWidth(label),
+          ),
+        );
+      lines.push(
+        theme.fg("borderAccent", "║") +
+          "  " +
+          padded +
+          theme.fg("borderAccent", "║"),
+      );
 
       // Addendum box beneath the highlighted option
       if (isCursor && state.addendumMode) {
@@ -153,9 +184,26 @@ export function createAskDialog(
         const boxWidth = innerWidth - 6;
         const buf = truncateToWidth(state.addendumBuffer + "█", boxWidth);
         const pad = " ".repeat(Math.max(0, boxWidth - visibleWidth(buf)));
-        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "┌" + "─".repeat(boxWidth) + "┐") + theme.fg("borderAccent", "║"));
-        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "│") + theme.fg("text", buf + pad) + theme.fg("border", "│") + theme.fg("borderAccent", "║"));
-        lines.push(theme.fg("borderAccent", "║") + "    " + theme.fg("border", "└" + "─".repeat(boxWidth) + "┘") + theme.fg("borderAccent", "║"));
+        lines.push(
+          theme.fg("borderAccent", "║") +
+            "    " +
+            theme.fg("border", "┌" + "─".repeat(boxWidth) + "┐") +
+            theme.fg("borderAccent", "║"),
+        );
+        lines.push(
+          theme.fg("borderAccent", "║") +
+            "    " +
+            theme.fg("border", "│") +
+            theme.fg("text", buf + pad) +
+            theme.fg("border", "│") +
+            theme.fg("borderAccent", "║"),
+        );
+        lines.push(
+          theme.fg("borderAccent", "║") +
+            "    " +
+            theme.fg("border", "└" + "─".repeat(boxWidth) + "┘") +
+            theme.fg("borderAccent", "║"),
+        );
       }
     }
 
@@ -169,9 +217,20 @@ export function createAskDialog(
       : " ".repeat(boxWidth);
     const pad = " ".repeat(Math.max(0, boxWidth - visibleWidth(buf)));
     return [
-      theme.fg("borderAccent", "║") + "  " + theme.fg("border", "┌" + "─".repeat(boxWidth) + "┐") + theme.fg("borderAccent", "║"),
-      theme.fg("borderAccent", "║") + "  " + theme.fg("border", "│") + theme.fg("text", buf + pad) + theme.fg("border", "│") + theme.fg("borderAccent", "║"),
-      theme.fg("borderAccent", "║") + "  " + theme.fg("border", "└" + "─".repeat(boxWidth) + "┘") + theme.fg("borderAccent", "║"),
+      theme.fg("borderAccent", "║") +
+        "  " +
+        theme.fg("border", "┌" + "─".repeat(boxWidth) + "┐") +
+        theme.fg("borderAccent", "║"),
+      theme.fg("borderAccent", "║") +
+        "  " +
+        theme.fg("border", "│") +
+        theme.fg("text", buf + pad) +
+        theme.fg("border", "│") +
+        theme.fg("borderAccent", "║"),
+      theme.fg("borderAccent", "║") +
+        "  " +
+        theme.fg("border", "└" + "─".repeat(boxWidth) + "┘") +
+        theme.fg("borderAccent", "║"),
     ];
   }
 
@@ -189,21 +248,43 @@ export function createAskDialog(
     // Divider
     lines.push(renderDivider(width));
     // Empty line
-    lines.push(theme.fg("borderAccent", "║") + " ".repeat(innerWidth) + theme.fg("borderAccent", "║"));
+    lines.push(
+      theme.fg("borderAccent", "║") +
+        " ".repeat(innerWidth) +
+        theme.fg("borderAccent", "║"),
+    );
     // Question text
     const questionText = truncateToWidth("  " + q.text, innerWidth);
-    const qPad = " ".repeat(Math.max(0, innerWidth - visibleWidth(questionText)));
-    lines.push(theme.fg("borderAccent", "║") + theme.bold(theme.fg("text", questionText + qPad)) + theme.fg("borderAccent", "║"));
+    const qPad = " ".repeat(
+      Math.max(0, innerWidth - visibleWidth(questionText)),
+    );
+    lines.push(
+      theme.fg("borderAccent", "║") +
+        theme.bold(theme.fg("text", questionText + qPad)) +
+        theme.fg("borderAccent", "║"),
+    );
     // Empty line
-    lines.push(theme.fg("borderAccent", "║") + " ".repeat(innerWidth) + theme.fg("borderAccent", "║"));
+    lines.push(
+      theme.fg("borderAccent", "║") +
+        " ".repeat(innerWidth) +
+        theme.fg("borderAccent", "║"),
+    );
     // Options
     lines.push(...renderOptions(q, innerWidth));
     // Empty line
-    lines.push(theme.fg("borderAccent", "║") + " ".repeat(innerWidth) + theme.fg("borderAccent", "║"));
+    lines.push(
+      theme.fg("borderAccent", "║") +
+        " ".repeat(innerWidth) +
+        theme.fg("borderAccent", "║"),
+    );
     // Text box
     lines.push(...renderTextBox(innerWidth));
     // Empty line
-    lines.push(theme.fg("borderAccent", "║") + " ".repeat(innerWidth) + theme.fg("borderAccent", "║"));
+    lines.push(
+      theme.fg("borderAccent", "║") +
+        " ".repeat(innerWidth) +
+        theme.fg("borderAccent", "║"),
+    );
     // Status bar divider
     lines.push(renderDivider(width));
     // Status bar
@@ -239,7 +320,9 @@ export function createAskDialog(
       state.currentQuestion = nextUnanswered;
       state.cursor = 0;
       state.inputMode = isTextOnly(questions[nextUnanswered]);
-      state.inputBuffer = state.inputMode ? (state.answers[questions[nextUnanswered].id] as string) : "";
+      state.inputBuffer = state.inputMode
+        ? (state.answers[questions[nextUnanswered].id] as string)
+        : "";
     }
     refresh();
   }
@@ -270,7 +353,9 @@ export function createAskDialog(
         return;
       }
       // Printable character
-      const inputChar = decodeKittyPrintable(data) ?? (data.length === 1 && data.charCodeAt(0) >= 32 ? data : undefined);
+      const inputChar =
+        decodeKittyPrintable(data) ??
+        (data.length === 1 && data.charCodeAt(0) >= 32 ? data : undefined);
       if (inputChar !== undefined) {
         state.inputBuffer += inputChar;
         refresh();
@@ -295,7 +380,9 @@ export function createAskDialog(
           if (q.type === "multi") {
             const current = state.answers[q.id] as string[];
             // Replace existing entry for this option, or add it
-            const idx = current.findIndex((v) => v === base || v.startsWith(base + ": "));
+            const idx = current.findIndex(
+              (v) => v === base || v.startsWith(base + ": "),
+            );
             if (idx !== -1) {
               const updated = [...current];
               updated[idx] = withAddendum;
@@ -317,7 +404,9 @@ export function createAskDialog(
         refresh();
         return;
       }
-      const addendumChar = decodeKittyPrintable(data) ?? (data.length === 1 && data.charCodeAt(0) >= 32 ? data : undefined);
+      const addendumChar =
+        decodeKittyPrintable(data) ??
+        (data.length === 1 && data.charCodeAt(0) >= 32 ? data : undefined);
       if (addendumChar !== undefined) {
         state.addendumBuffer += addendumChar;
         refresh();
@@ -336,10 +425,13 @@ export function createAskDialog(
     // Cycle questions
     if (questions.length > 1) {
       if (matchesKey(data, Key.left)) {
-        state.currentQuestion = (state.currentQuestion - 1 + questions.length) % questions.length;
+        state.currentQuestion =
+          (state.currentQuestion - 1 + questions.length) % questions.length;
         state.cursor = 0;
         state.inputMode = isTextOnly(questions[state.currentQuestion]);
-        state.inputBuffer = state.inputMode ? (state.answers[questions[state.currentQuestion].id] as string) : "";
+        state.inputBuffer = state.inputMode
+          ? (state.answers[questions[state.currentQuestion].id] as string)
+          : "";
         refresh();
         return;
       }
@@ -347,7 +439,9 @@ export function createAskDialog(
         state.currentQuestion = (state.currentQuestion + 1) % questions.length;
         state.cursor = 0;
         state.inputMode = isTextOnly(questions[state.currentQuestion]);
-        state.inputBuffer = state.inputMode ? (state.answers[questions[state.currentQuestion].id] as string) : "";
+        state.inputBuffer = state.inputMode
+          ? (state.answers[questions[state.currentQuestion].id] as string)
+          : "";
         refresh();
         return;
       }
@@ -372,11 +466,17 @@ export function createAskDialog(
     }
 
     // Space — select single (no advance) or toggle multi
-    if (matchesKey(data, Key.space) && opts.length > 0 && state.cursor < opts.length) {
+    if (
+      matchesKey(data, Key.space) &&
+      opts.length > 0 &&
+      state.cursor < opts.length
+    ) {
       if (q.type === "multi") {
         const current = state.answers[q.id] as string[];
         const opt = opts[state.cursor];
-        const idx = current.findIndex((v) => v === opt || v.startsWith(opt + ": "));
+        const idx = current.findIndex(
+          (v) => v === opt || v.startsWith(opt + ": "),
+        );
         if (idx !== -1) {
           state.answers[q.id] = current.filter((_, i) => i !== idx);
         } else {
@@ -390,7 +490,11 @@ export function createAskDialog(
     }
 
     // Tab — open addendum box beneath highlighted option
-    if ((matchesKey(data, Key.tab) || data === "\t") && opts.length > 0 && state.cursor < opts.length) {
+    if (
+      (matchesKey(data, Key.tab) || data === "\t") &&
+      opts.length > 0 &&
+      state.cursor < opts.length
+    ) {
       state.addendumMode = true;
       state.addendumBuffer = "";
       refresh();
@@ -399,7 +503,11 @@ export function createAskDialog(
 
     // Enter — select (single), confirm multi, activate text input, or submit
     if (matchesKey(data, Key.enter)) {
-      if (q.type === "single" && opts.length > 0 && state.cursor < opts.length) {
+      if (
+        q.type === "single" &&
+        opts.length > 0 &&
+        state.cursor < opts.length
+      ) {
         state.answers[q.id] = opts[state.cursor];
         advanceOrSubmit();
         return;
@@ -416,7 +524,10 @@ export function createAskDialog(
           return;
         }
         state.inputMode = true;
-        state.inputBuffer = typeof state.answers[q.id] === "string" ? (state.answers[q.id] as string) : "";
+        state.inputBuffer =
+          typeof state.answers[q.id] === "string"
+            ? (state.answers[q.id] as string)
+            : "";
         refresh();
         return;
       }
@@ -427,6 +538,8 @@ export function createAskDialog(
   return {
     render,
     handleInput,
-    invalidate: () => { cachedLines = undefined; },
+    invalidate: () => {
+      cachedLines = undefined;
+    },
   };
 }
