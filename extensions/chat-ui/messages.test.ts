@@ -2,7 +2,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { renderEntry } from "./messages.ts";
-import type { ChatEntry } from "./store.ts";
+import type { ChatEntry, ToolCallEntry, ToolResultEntry } from "./store.ts";
 
 function mockTheme() {
   return {
@@ -99,5 +99,53 @@ describe("renderEntry — image", () => {
     const lines = renderEntry(entry, noEntries, 40, mockTheme());
     assert.equal(lines.length, 1);
     assert.ok(lines[0].includes("screenshot.png"));
+  });
+});
+
+describe("renderEntry — tool_call with result", () => {
+  function makeToolCall(toolCallId: string): ToolCallEntry {
+    return {
+      type: "tool_call",
+      id: "tc1",
+      toolCallId,
+      toolName: "read_file",
+      args: '{"path":"foo.ts"}',
+      isRunning: false,
+      isError: false,
+    };
+  }
+  function makeToolResult(
+    toolCallId: string,
+    result: string,
+    isError = false,
+  ): ToolResultEntry {
+    return { type: "tool_result", id: "tr1", toolCallId, result, isError };
+  }
+
+  test("shows line count when result present", () => {
+    const call = makeToolCall("c1");
+    const result = makeToolResult("c1", "line1\nline2\nline3");
+    const lines = renderEntry(call, [call, result], 60, mockTheme());
+    assert.ok(lines[0].includes("3 lines"));
+  });
+
+  test("shows checkmark when not error", () => {
+    const call = makeToolCall("c1");
+    const result = makeToolResult("c1", "ok");
+    const lines = renderEntry(call, [call, result], 60, mockTheme());
+    assert.ok(lines[0].includes("✓"));
+  });
+
+  test("shows ✗ on error", () => {
+    const call = makeToolCall("c1");
+    const result = makeToolResult("c1", "failed", true);
+    const lines = renderEntry(call, [call, result], 60, mockTheme());
+    assert.ok(lines[0].includes("✗"));
+  });
+
+  test("tool_result entry renders as empty array (co-rendered by tool_call)", () => {
+    const result = makeToolResult("c1", "content");
+    const lines = renderEntry(result, [], 60, mockTheme());
+    assert.equal(lines.length, 0);
   });
 });

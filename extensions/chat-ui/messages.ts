@@ -66,7 +66,7 @@ export function renderEntry(
       const status = entry.isRunning
         ? ""
         : result
-          ? entry.isError
+          ? result.isError
             ? " " + error("✗")
             : " " + accent("✓")
           : "";
