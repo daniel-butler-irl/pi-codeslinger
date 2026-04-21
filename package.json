@@ -16,6 +16,7 @@
       "./extensions/ask/index.ts",
       "./extensions/header/index.ts",
       "./extensions/intent/index.ts",
+      "./extensions/orchestrator/index.ts",
       "./node_modules/@tmustier/pi-files-widget/index.ts"
     ],
     "skills": [
