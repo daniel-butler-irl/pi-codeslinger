@@ -13,18 +13,68 @@ import {
   mkdirSync,
   renameSync,
   unlinkSync,
+  existsSync,
+  rmSync,
+  statSync,
+  appendFileSync,
 } from "fs";
 import { join } from "path";
+
+/**
+ * The lifecycle phase an intent is currently in.
+ *
+ * - defining: collaborative with the user; intent.md is writable
+ * - implementing: locked; an implementer subagent is doing the work
+ * - reviewing: locked; an adversarial reviewer subagent is checking the work
+ * - done: terminal; verification passed and review found no issues
+ * - blocked-on-child: paused while a child (prerequisite) intent completes
+ */
+export type IntentPhase =
+  | "defining"
+  | "implementing"
+  | "reviewing"
+  | "done"
+  | "blocked-on-child";
 
 export interface Intent {
   id: string;
   title: string;
   createdAt: number;
+  updatedAt: number;
+  parentId: string | null;
+  phase: IntentPhase;
+  reworkCount: number;
 }
 
+/**
+ * Top-level store.
+ *
+ * activeIntentId points to the intent currently being worked on. In a tree
+ * with child intents, that is the deepest node being acted on — not the root.
+ */
 export interface IntentStore {
   activeIntentId: string | null;
   intents: Intent[];
+}
+
+/**
+ * Fill missing fields on a raw intent coming off disk, so older data files
+ * stay usable after the schema grew. Defaults are deliberately conservative:
+ * unknown intents are treated as top-level, still in "defining", fresh rework
+ * count. updatedAt falls back to createdAt — best information we have.
+ */
+function migrateIntent(
+  raw: Partial<Intent> & { id: string; title: string; createdAt: number },
+): Intent {
+  return {
+    id: raw.id,
+    title: raw.title,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt ?? raw.createdAt,
+    parentId: raw.parentId ?? null,
+    phase: raw.phase ?? "defining",
+    reworkCount: raw.reworkCount ?? 0,
+  };
 }
 
 function piDir(cwd: string): string {
@@ -35,8 +85,49 @@ function storePath(cwd: string): string {
   return join(piDir(cwd), "intents.json");
 }
 
-export function intentFilePath(cwd: string, id: string): string {
+/**
+ * Directory that holds all files for a single intent.
+ *
+ * Layout under <cwd>/.pi/intents/<id>/:
+ *   intent.md          — the contract (locked outside the defining phase)
+ *   log.md             — append-only journal (discoveries, decisions, findings)
+ *   verification.json  — cached results of the last verification run
+ */
+export function intentDir(cwd: string, id: string): string {
+  return join(piDir(cwd), "intents", id);
+}
+
+/**
+ * Path to the intent contract file.
+ *
+ * Returns `<id>/intent.md` under the intent directory.
+ */
+export function intentContractPath(cwd: string, id: string): string {
+  return join(intentDir(cwd, id), "intent.md");
+}
+
+export function intentLogPath(cwd: string, id: string): string {
+  return join(intentDir(cwd, id), "log.md");
+}
+
+export function intentVerificationPath(cwd: string, id: string): string {
+  return join(intentDir(cwd, id), "verification.json");
+}
+
+/**
+ * Legacy single-file path from before the directory-per-intent layout.
+ * Kept only so migration can find and move it. Not used for new intents.
+ */
+function legacyIntentFilePath(cwd: string, id: string): string {
   return join(piDir(cwd), "intents", `${id}.md`);
+}
+
+/**
+ * @deprecated Use intentContractPath. Kept as an alias so callers that
+ * haven't been updated still resolve to the contract file.
+ */
+export function intentFilePath(cwd: string, id: string): string {
+  return intentContractPath(cwd, id);
 }
 
 /**
@@ -46,9 +137,46 @@ export function intentFilePath(cwd: string, id: string): string {
 export function loadStore(cwd: string): IntentStore {
   try {
     const raw = readFileSync(storePath(cwd), "utf-8");
-    return JSON.parse(raw) as IntentStore;
+    const parsed = JSON.parse(raw) as {
+      activeIntentId: string | null;
+      intents: Array<
+        Partial<Intent> & { id: string; title: string; createdAt: number }
+      >;
+    };
+    const store: IntentStore = {
+      activeIntentId: parsed.activeIntentId ?? null,
+      intents: (parsed.intents ?? []).map(migrateIntent),
+    };
+    migrateLegacyFileLayout(cwd, store);
+    return store;
   } catch {
     return { activeIntentId: null, intents: [] };
+  }
+}
+
+/**
+ * Move any legacy single-file intents (<id>.md) into the per-intent
+ * directory layout (<id>/intent.md). Idempotent — if the directory-form
+ * already exists, the legacy file is simply removed.
+ */
+function migrateLegacyFileLayout(cwd: string, store: IntentStore): void {
+  for (const intent of store.intents) {
+    const legacy = legacyIntentFilePath(cwd, intent.id);
+    if (!existsSync(legacy)) continue;
+    try {
+      // Only migrate if the legacy path is a real file, not the new directory.
+      if (!statSync(legacy).isFile()) continue;
+    } catch {
+      continue;
+    }
+    const contract = intentContractPath(cwd, intent.id);
+    mkdirSync(intentDir(cwd, intent.id), { recursive: true });
+    if (existsSync(contract)) {
+      // The new location already exists. Keep it, drop the stale legacy file.
+      unlinkSync(legacy);
+    } else {
+      renameSync(legacy, contract);
+    }
   }
 }
 
@@ -68,7 +196,7 @@ export function saveStore(cwd: string, store: IntentStore): void {
  */
 export function loadIntentContent(cwd: string, id: string): string {
   try {
-    return readFileSync(intentFilePath(cwd, id), "utf-8");
+    return readFileSync(intentContractPath(cwd, id), "utf-8");
   } catch {
     return "";
   }
@@ -82,9 +210,74 @@ export function saveIntentContent(
   id: string,
   content: string,
 ): void {
-  const dir = join(piDir(cwd), "intents");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(intentFilePath(cwd, id), content, "utf-8");
+  mkdirSync(intentDir(cwd, id), { recursive: true });
+  writeFileSync(intentContractPath(cwd, id), content, "utf-8");
+}
+
+// ── Log and verification helpers ────────────────────────────────────────────
+//
+// The log is append-only; nothing reads back the middle of it, so simple
+// appendFile is sufficient. Entries are markdown blocks separated by blank
+// lines, timestamped so the sequence is obvious.
+
+export interface LogEntry {
+  /** Short tag for the entry type, e.g. "discovery", "decision", "review". */
+  kind: string;
+  /** Free-form markdown body. */
+  body: string;
+}
+
+export function appendLogEntry(cwd: string, id: string, entry: LogEntry): void {
+  mkdirSync(intentDir(cwd, id), { recursive: true });
+  const stamp = new Date().toISOString();
+  const block = `\n## [${stamp}] ${entry.kind}\n\n${entry.body.trimEnd()}\n`;
+  appendFileSync(intentLogPath(cwd, id), block, "utf-8");
+}
+
+export function readLog(cwd: string, id: string): string {
+  try {
+    return readFileSync(intentLogPath(cwd, id), "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+export interface VerificationResult {
+  /** ISO timestamp of when verification ran. */
+  ranAt: string;
+  /** Did every command succeed? */
+  passed: boolean;
+  /** Per-command results. */
+  commands: Array<{
+    command: string;
+    exitCode: number;
+    passed: boolean;
+    /** Trimmed stdout+stderr for display. */
+    output: string;
+  }>;
+}
+
+export function writeVerification(
+  cwd: string,
+  id: string,
+  result: VerificationResult,
+): void {
+  mkdirSync(intentDir(cwd, id), { recursive: true });
+  const tmp = intentVerificationPath(cwd, id) + ".tmp";
+  writeFileSync(tmp, JSON.stringify(result, null, 2), "utf-8");
+  renameSync(tmp, intentVerificationPath(cwd, id));
+}
+
+export function readVerification(
+  cwd: string,
+  id: string,
+): VerificationResult | null {
+  try {
+    const raw = readFileSync(intentVerificationPath(cwd, id), "utf-8");
+    return JSON.parse(raw) as VerificationResult;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -105,6 +298,25 @@ export function deriveTitle(description: string): string {
 }
 
 /**
+ * Build the structured markdown template for a new intent.
+ * The HTML comments act as placeholders that validateIntentForLock
+ * treats as empty — so the gate works until the user fills them in.
+ */
+export function intentTemplate(description: string): string {
+  return `# Intent
+
+## Description
+${description}
+
+## Success Criteria
+<!-- What does "done" look like? List specific, verifiable outcomes. -->
+
+## Verification
+<!-- How will you verify each criterion? Independent of the LLM. -->
+`;
+}
+
+/**
  * Create a new intent: adds metadata to the store and writes the initial .md file.
  * Does NOT call saveStore() — caller must do that.
  */
@@ -112,16 +324,22 @@ export function createIntent(
   store: IntentStore,
   cwd: string,
   description: string,
+  options?: { parentId?: string | null },
 ): Intent {
   const id = crypto.randomUUID();
+  const now = Date.now();
   const intent: Intent = {
     id,
     title: deriveTitle(description),
-    createdAt: Date.now(),
+    createdAt: now,
+    updatedAt: now,
+    parentId: options?.parentId ?? null,
+    phase: "defining",
+    reworkCount: 0,
   };
   store.intents.push(intent);
   store.activeIntentId = id;
-  saveIntentContent(cwd, id, description);
+  saveIntentContent(cwd, id, intentTemplate(description));
   return intent;
 }
 
@@ -135,13 +353,119 @@ export function deleteIntent(
   cwd: string,
   id: string,
 ): void {
+  // Refuse to orphan children. If the caller wants the subtree gone, they
+  // must delete leaves first. This keeps the tree well-formed under all ops.
+  const children = getChildren(store, id);
+  if (children.length > 0) {
+    throw new Error(
+      `Cannot delete intent ${id}: it has ${children.length} child intent(s). Delete children first.`,
+    );
+  }
+  // Remove the whole directory. Also wipe the legacy single-file if it
+  // somehow still exists (defence in depth against half-migrated state).
   try {
-    unlinkSync(intentFilePath(cwd, id));
+    rmSync(intentDir(cwd, id), { recursive: true, force: true });
   } catch {
-    /* file may not exist */
+    /* dir may not exist */
+  }
+  try {
+    unlinkSync(legacyIntentFilePath(cwd, id));
+  } catch {
+    /* legacy file may not exist */
   }
   store.intents = store.intents.filter((i) => i.id !== id);
   if (store.activeIntentId === id) {
     store.activeIntentId = store.intents.at(-1)?.id ?? null;
   }
+}
+
+// ── Phase transitions ───────────────────────────────────────────────────────
+//
+// All legal transitions live here as a single source of truth. Anything
+// trying to change an intent's phase goes through transitionPhase() so the
+// rules are enforced uniformly.
+
+const LEGAL_TRANSITIONS: Record<IntentPhase, ReadonlySet<IntentPhase>> = {
+  defining: new Set(["implementing", "blocked-on-child"]),
+  implementing: new Set(["reviewing", "blocked-on-child"]),
+  reviewing: new Set(["implementing", "done"]),
+  "blocked-on-child": new Set(["defining", "implementing"]),
+  done: new Set(),
+};
+
+export function canTransition(from: IntentPhase, to: IntentPhase): boolean {
+  return LEGAL_TRANSITIONS[from].has(to);
+}
+
+/**
+ * Move an intent to a new phase. Throws if the transition is illegal.
+ * Also bumps updatedAt. Does NOT save — caller is responsible.
+ */
+export function transitionPhase(
+  store: IntentStore,
+  id: string,
+  to: IntentPhase,
+): Intent {
+  const intent = store.intents.find((i) => i.id === id);
+  if (!intent) throw new Error(`Intent not found: ${id}`);
+  if (!canTransition(intent.phase, to)) {
+    throw new Error(
+      `Illegal phase transition for intent ${id}: ${intent.phase} → ${to}`,
+    );
+  }
+  intent.phase = to;
+  intent.updatedAt = Date.now();
+  return intent;
+}
+
+// ── Tree traversal ──────────────────────────────────────────────────────────
+//
+// The store is a flat list; the tree shape is logical, built by walking
+// parentId references. These helpers keep that walk in one place.
+
+/**
+ * Direct children of an intent (one level down).
+ */
+export function getChildren(store: IntentStore, id: string): Intent[] {
+  return store.intents.filter((i) => i.parentId === id);
+}
+
+/**
+ * Parent of an intent, or undefined if top-level or unknown id.
+ */
+export function getParent(store: IntentStore, id: string): Intent | undefined {
+  const intent = store.intents.find((i) => i.id === id);
+  if (!intent || intent.parentId === null) return undefined;
+  return store.intents.find((i) => i.id === intent.parentId);
+}
+
+/**
+ * Top-level ancestor of an intent. Returns the intent itself if it's already
+ * top-level. Returns undefined for an unknown id.
+ */
+export function getRoot(store: IntentStore, id: string): Intent | undefined {
+  let cursor = store.intents.find((i) => i.id === id);
+  if (!cursor) return undefined;
+  while (cursor.parentId !== null) {
+    const parent = store.intents.find((i) => i.id === cursor!.parentId);
+    if (!parent) return cursor; // orphaned parent ref; stop walking
+    cursor = parent;
+  }
+  return cursor;
+}
+
+/**
+ * Path from the root to the active intent, inclusive.
+ * Empty array if there is no active intent.
+ */
+export function getActivePath(store: IntentStore): Intent[] {
+  if (!store.activeIntentId) return [];
+  const path: Intent[] = [];
+  let cursor = store.intents.find((i) => i.id === store.activeIntentId);
+  while (cursor) {
+    path.unshift(cursor);
+    if (cursor.parentId === null) break;
+    cursor = store.intents.find((i) => i.id === cursor!.parentId);
+  }
+  return path;
 }
