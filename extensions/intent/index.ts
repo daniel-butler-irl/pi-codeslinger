@@ -86,6 +86,17 @@ export default function (pi: ExtensionAPI) {
         panel = createIntentSidebar(store, tui, theme);
         refreshPanel();
 
+        const stored = (tui as any).__intentOriginalChildren as
+          | Component[]
+          | undefined;
+        if (stored) {
+          for (let i = 0; i < stored.length; i++) {
+            tui.children[i] = stored[i];
+          }
+          tui.children.length = stored.length;
+        }
+        (tui as any).__intentOriginalChildren = [...tui.children];
+
         // Squeeze the rest of the TUI so the sidebar has room.
         for (let i = 0; i < tui.children.length; i++) {
           tui.children[i] = new WidthLimiter(
