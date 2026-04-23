@@ -14,6 +14,7 @@
   "pi": {
     "extensions": [
       "./extensions/ask/index.ts",
+      "./extensions/gtfo/index.ts",
       "./extensions/header/index.ts",
       "./extensions/intent/index.ts",
       "./extensions/orchestrator/index.ts",
