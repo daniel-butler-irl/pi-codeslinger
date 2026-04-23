@@ -41,3 +41,17 @@ A blocking question dialog. When the agent needs clarification or a decision, it
 | `single` | Select one option from a list               |
 | `multi`  | Toggle multiple options with space          |
 | `text`   | Free-text input (with optional suggestions) |
+
+## Intent-Driven Workflow
+
+This loadout uses `.pi/intents/` for tracked, structured work:
+
+- **Intent contracts** define goals, success criteria, and verification
+- **Orchestrator** manages phases: defining → implementing → reviewing → done
+- **Version controlled**: `.pi/` is committed so teams share intent history
+
+### Conventions
+
+- Commit `.pi/intents/` with code changes
+- Each intent has: `intent.md`, `log.md`, `understanding.md`, verification results
+- Use `/intent` overlay (Ctrl+I) to create, list, and switch intents
