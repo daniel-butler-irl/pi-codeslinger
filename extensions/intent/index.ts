@@ -2,7 +2,11 @@
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
+  ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
+// TODO: Migrate to 'typebox' once TypeScript types are fully compatible
+// Currently using @sinclair/typebox with Pi 0.69.0's compatibility shims
+import { Type } from "@sinclair/typebox";
 import { visibleWidth, type Component, type TUI } from "@mariozechner/pi-tui";
 import { resolve, normalize } from "path";
 import { validateIntentForLock } from "./validate.js";
@@ -16,10 +20,18 @@ import {
   saveIntentContent,
   intentContractPath,
   transitionPhase,
+  readUnderstanding,
+  writeUnderstanding,
+  intentUnderstandingPath,
+  readLog,
+  readVerification,
+  readReviewResult,
   type IntentStore,
   type IntentPhase,
 } from "./store.js";
 import { createIntentSidebar } from "./panel.js";
+import { IntentOverlayComponent, type OverlayAction } from "./overlay.js";
+import { generateFallbackTitle } from "./title-generator.js";
 
 /**
  * Wraps a child Component so it renders at a limited width but pads its
@@ -27,10 +39,13 @@ import { createIntentSidebar } from "./panel.js";
  * over to the left when we paint the intent sidebar on the right.
  */
 class WidthLimiter implements Component {
-  constructor(
-    private readonly inner: Component,
-    private readonly getWidth: () => number,
-  ) {}
+  private readonly inner: Component;
+  private readonly getWidth: () => number;
+
+  constructor(inner: Component, getWidth: () => number) {
+    this.inner = inner;
+    this.getWidth = getWidth;
+  }
 
   render(width: number): string[] {
     const limited = this.getWidth();
@@ -55,6 +70,15 @@ export default function (pi: ExtensionAPI) {
   let tuiRef: TUI | null = null;
   let cwdRef: string = process.cwd();
 
+  // Track last injection to determine when re-injection is needed
+  interface InjectionState {
+    intentId: string;
+    phase: IntentPhase;
+    contractUpdatedAt: number;
+    understandingMtime: number | null;
+  }
+  let lastInjection: InjectionState | null = null;
+
   // ── Helpers ─────────────────────────────────────────────────────────────
 
   function refreshPanel(): void {
@@ -62,7 +86,20 @@ export default function (pi: ExtensionAPI) {
     const desc = active
       ? shortDesc(loadIntentContent(cwdRef, active.id))
       : null;
-    panel?.update(store, desc, active?.phase ?? null);
+    const understanding = active ? readUnderstanding(cwdRef, active.id) : null;
+    const reviewResult = active ? readReviewResult(cwdRef, active.id) : null;
+    panel?.update(
+      store,
+      desc,
+      active?.phase ?? null,
+      understanding,
+      reviewResult,
+    );
+  }
+
+  function reloadStoreFromDisk(): void {
+    store = loadStore(cwdRef);
+    refreshPanel();
   }
 
   function persist(cwd: string): void {
@@ -70,11 +107,156 @@ export default function (pi: ExtensionAPI) {
     refreshPanel();
   }
 
+  /**
+   * Inject or re-inject the active intent contract and understanding into
+   * the AI assistant context. Uses display: false to keep the UI clean.
+   */
+  function injectIntentContext(): void {
+    const active = getActiveIntent(store);
+    if (!active) {
+      lastInjection = null;
+      return;
+    }
+
+    const contract = loadIntentContent(cwdRef, active.id);
+    const understanding = readUnderstanding(cwdRef, active.id);
+    const reviewResult = readReviewResult(cwdRef, active.id);
+
+    // Build metadata section
+    const metadata = [
+      `**Intent ID:** ${active.id}`,
+      `**Title:** ${active.title}`,
+      `**Phase:** ${active.phase}`,
+      `**Rework Count:** ${active.reworkCount}`,
+      `**Last Updated:** ${new Date(active.updatedAt).toISOString()}`,
+    ].join("\n");
+
+    // Build the full context message
+    const parts: string[] = [
+      "# Active Intent Context",
+      "",
+      metadata,
+      "",
+      "## Intent Contract",
+      "",
+      contract || "(Contract is empty)",
+    ];
+
+    if (understanding) {
+      parts.push("", "## Current Understanding", "", understanding);
+    }
+
+    if (reviewResult) {
+      const verdict =
+        reviewResult.verdict === "pass" ? "PASSED" : "REWORK NEEDED";
+      parts.push("", `## Review Result (${verdict})`, "", reviewResult.summary);
+    }
+
+    const content = parts.join("\n");
+
+    // Inject the message into the conversation
+    pi.sendMessage(
+      {
+        customType: "intent-context",
+        content,
+        display: false,
+      },
+      { deliverAs: "nextTurn", triggerTurn: false },
+    );
+
+    // Track this injection
+    const understandingPath = intentUnderstandingPath(cwdRef, active.id);
+    let understandingMtime: number | null = null;
+    try {
+      const { existsSync, statSync } = require("fs");
+      if (existsSync(understandingPath)) {
+        understandingMtime = statSync(understandingPath).mtimeMs;
+      }
+    } catch {
+      // File doesn't exist or can't be read
+    }
+
+    lastInjection = {
+      intentId: active.id,
+      phase: active.phase,
+      contractUpdatedAt: active.updatedAt,
+      understandingMtime,
+    };
+  }
+
+  /**
+   * Check if the intent context needs to be re-injected based on:
+   * - Intent changed
+   * - Phase changed
+   * - Contract updated
+   * - Understanding file modified
+   */
+  function needsReinjection(): boolean {
+    const active = getActiveIntent(store);
+    if (!active) {
+      return false;
+    }
+
+    // No previous injection - needs injection
+    if (!lastInjection) {
+      return true;
+    }
+
+    // Intent changed
+    if (lastInjection.intentId !== active.id) {
+      return true;
+    }
+
+    // Phase changed
+    if (lastInjection.phase !== active.phase) {
+      return true;
+    }
+
+    // Contract updated
+    if (lastInjection.contractUpdatedAt !== active.updatedAt) {
+      return true;
+    }
+
+    // Understanding file modified
+    try {
+      const { existsSync, statSync } = require("fs");
+      const understandingPath = intentUnderstandingPath(cwdRef, active.id);
+      const currentMtime = existsSync(understandingPath)
+        ? statSync(understandingPath).mtimeMs
+        : null;
+      if (currentMtime !== lastInjection.understandingMtime) {
+        return true;
+      }
+    } catch {
+      // If we can't check, err on the side of not re-injecting
+    }
+
+    return false;
+  }
+
   // ── Lifecycle: mount the sidebar ────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx) => {
     store = loadStore(ctx.cwd);
     cwdRef = ctx.cwd;
+
+    // Emit event if there's an active intent so the agent knows to load understanding
+    const active = getActiveIntent(store);
+    if (active) {
+      pi.events.emit("intent:active-on-start", {
+        id: active.id,
+        title: active.title,
+        phase: active.phase,
+        contractPath: intentContractPath(ctx.cwd, active.id),
+        understandingPath: intentUnderstandingPath(ctx.cwd, active.id),
+      });
+
+      // Auto-inject intent context on session start
+      injectIntentContext();
+
+      // Note: Implementer and reviewer are NOT auto-dispatched on session start.
+      // The user triggers them manually via the overlay (Ctrl+I) or by locking/reviewing.
+    }
 
     ctx.ui.custom(
       (tui, theme) => {
@@ -123,6 +305,73 @@ export default function (pi: ExtensionAPI) {
     );
   });
 
+  // ── Context injection and re-injection ─────────────────────────────────────
+  //
+  // Inject intent context at session start (already done in session_start).
+  // Re-inject before agent starts if changes detected.
+  // Also handle dynamic refresh based on message distance.
+
+  pi.on("before_agent_start", () => {
+    if (needsReinjection()) {
+      injectIntentContext();
+    }
+  });
+
+  // Monitor context to check if re-injection needed based on message distance
+  pi.on("context", (event) => {
+    // Count messages since last injection by looking for our custom type
+    // in the last 20 messages
+    const messages = event.messages;
+    const last20 = messages.slice(-20);
+
+    // Check if our intent-context message is in the last 20
+    const hasRecentContext = last20.some(
+      (m: any) => m.role === "custom" && m.customType === "intent-context",
+    );
+
+    // If not in last 20 and we have an active intent, mark that we need reinjection
+    // The before_agent_start hook will handle the actual injection
+    if (!hasRecentContext && getActiveIntent(store)) {
+      // Force re-injection by clearing the lastInjection state
+      // This will make needsReinjection() return true
+      lastInjection = null;
+    }
+  });
+
+  // ── Dynamic refresh on events ───────────────────────────────────────────────
+  //
+  // Listen for events that should trigger re-injection or refresh the sidebar.
+
+  function syncIntentStateFromEvents(): void {
+    reloadStoreFromDisk();
+    injectIntentContext();
+  }
+
+  pi.events.on("intent:phase-changed", () => {
+    syncIntentStateFromEvents();
+  });
+
+  pi.events.on("intent:updated", () => {
+    syncIntentStateFromEvents();
+  });
+
+  pi.events.on("intent:active-changed", () => {
+    syncIntentStateFromEvents();
+  });
+
+  pi.events.on("intent:created", () => {
+    syncIntentStateFromEvents();
+  });
+
+  pi.events.on("intent:deleted", () => {
+    syncIntentStateFromEvents();
+  });
+
+  pi.events.on("orchestrator:reviewer-status", (payload: unknown) => {
+    const { message } = payload as { intentId: string; message: string };
+    panel?.updateStatus(message);
+  });
+
   // ── Lock enforcement ────────────────────────────────────────────────────
   //
   // Any intent not in the "defining" phase has its contract file frozen.
@@ -153,79 +402,685 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  // ── Intent overlay handler ─────────────────────────────────────────────────
+
+  async function showIntentOverlay(
+    ctx: ExtensionCommandContext | ExtensionContext,
+  ): Promise<void> {
+    const result = await ctx.ui.custom<OverlayAction>(
+      (_tui, theme, _kb, done) =>
+        new IntentOverlayComponent(store, theme, done, ctx.cwd),
+      { overlay: true },
+    );
+
+    if (!result || result.type === "cancel") {
+      return;
+    }
+
+    if (result.type === "create") {
+      // Save the currently active intent ID so we can restore it
+      const previousActiveId = store.activeIntentId;
+
+      // Create the intent (this will auto-activate it)
+      const intent = createIntent(store, ctx.cwd, result.description);
+
+      // Use the title from overlay if provided, otherwise generate fallback
+      const title = result.title || generateFallbackTitle(result.description);
+      intent.title = title;
+
+      // IMPORTANT: Restore the previous active intent (don't switch to new one)
+      store.activeIntentId = previousActiveId;
+
+      persist(ctx.cwd);
+      pi.events.emit("intent:created", { id: intent.id });
+      ctx.ui.notify(
+        `Intent created: "${intent.title}" (not activated)`,
+        "info",
+      );
+    } else if (result.type === "switch") {
+      const intent = store.intents.find((i) => i.id === result.intentId);
+      if (!intent) return;
+
+      // Switch intent
+      store.activeIntentId = intent.id;
+      persist(ctx.cwd);
+      pi.events.emit("intent:active-changed", { id: intent.id });
+
+      ctx.ui.notify(`Switching to: ${intent.title}`, "info");
+
+      // Start a fresh session with the new intent active (if we have command context)
+      // Note: No post-switch work needed - function returns immediately after.
+      // If we needed to do work after the switch, we'd use withSession callback.
+      if ("newSession" in ctx) {
+        await ctx.newSession();
+      }
+    } else if (result.type === "edit") {
+      await handleEdit(ctx, result.intentId);
+      refreshPanel();
+    } else if (result.type === "lock") {
+      await handleLock(ctx, result.intentId);
+      refreshPanel();
+    } else if (result.type === "transition") {
+      await handleTransition(ctx, result.intentId, result.toPhase);
+      refreshPanel();
+    } else if (result.type === "review") {
+      await handleReview(ctx, result.intentId);
+      refreshPanel();
+    } else if (result.type === "delete") {
+      await handleDelete(ctx, result.intentId);
+      refreshPanel();
+    }
+
+    refreshPanel();
+  }
+
+  // ── Hotkey registration ─────────────────────────────────────────────────
+
+  pi.registerShortcut("ctrl+i", {
+    description: "Open intent management overlay",
+    handler: async (ctx) => {
+      if (!ctx.hasUI) return;
+      await showIntentOverlay(ctx);
+    },
+  });
+
   // ── /intent command ─────────────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "update_understanding",
+    label: "Update Understanding",
+    description:
+      "Update the session's understanding of the current intent problem. " +
+      "This should capture: 1) current problem understanding, 2) key discoveries, " +
+      "3) next steps needed, 4) open questions. This persists across sessions.",
+    parameters: Type.Object({
+      understanding: Type.String({
+        description:
+          "Markdown-formatted summary of current problem understanding, " +
+          "next steps, and open questions. Should be concise but informative.",
+      }),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+      const active = getActiveIntent(store);
+      if (!active) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No active intent. Create or switch to an intent first.",
+            },
+          ],
+          isError: true,
+          details: undefined,
+        };
+      }
+      writeUnderstanding(cwdRef, active.id, params.understanding);
+      refreshPanel();
+
+      // Trigger re-injection since understanding changed
+      injectIntentContext();
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Understanding updated and will persist across sessions.",
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "read_intent",
+    label: "Read Intent",
+    description:
+      "Read the contract for the active intent. Returns the full content " +
+      "of the intent.md file (Description, Success Criteria, and Verification sections).",
+    parameters: Type.Object({}),
+    execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
+      const active = getActiveIntent(store);
+      if (!active) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No active intent. Create or switch to an intent first.",
+            },
+          ],
+          isError: true,
+          details: undefined,
+        };
+      }
+      const content = loadIntentContent(cwdRef, active.id);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: content || "(Intent contract file is empty)",
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "list_intents",
+    label: "List Intents",
+    description:
+      "List all intents in the project with their metadata (id, title, phase, " +
+      "parent relationship). Useful for understanding the intent tree structure, " +
+      "finding related work, or checking status.",
+    parameters: Type.Object({
+      filter: Type.Optional(
+        Type.Union(
+          [
+            Type.Literal("all"),
+            Type.Literal("active"),
+            Type.Literal("done"),
+            Type.Literal("children"),
+          ],
+          {
+            description:
+              'Filter: "all" (default), "active" (current intent only), ' +
+              '"done" (completed intents), "children" (children of current intent)',
+          },
+        ),
+      ),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+      const filter = params.filter ?? "all";
+      const { getChildren } = await import("./store.js");
+
+      let intents = store.intents;
+      if (filter === "active" && store.activeIntentId) {
+        intents = intents.filter((i) => i.id === store.activeIntentId);
+      } else if (filter === "done") {
+        intents = intents.filter((i) => i.phase === "done");
+      } else if (filter === "children" && store.activeIntentId) {
+        intents = getChildren(store, store.activeIntentId);
+      }
+
+      if (intents.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No intents found matching the filter.",
+            },
+          ],
+          isError: false,
+          details: undefined,
+        };
+      }
+
+      const lines = intents.map((intent) => {
+        const active = intent.id === store.activeIntentId ? " [ACTIVE]" : "";
+        const parent = intent.parentId ? ` (child of ${intent.parentId})` : "";
+        return (
+          `- ${intent.title}${active}\n` +
+          `  ID: ${intent.id}\n` +
+          `  Phase: ${intent.phase}\n` +
+          `  Rework count: ${intent.reworkCount}${parent}`
+        );
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Found ${intents.length} intent(s):\n\n${lines.join("\n\n")}`,
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "read_intent_log",
+    label: "Read Intent Log",
+    description:
+      "Read the append-only log for the active intent. The log contains " +
+      "discoveries, decisions, verification results, review findings, and " +
+      "other timestamped events from the intent's lifecycle.",
+    parameters: Type.Object({}),
+    execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
+      const active = getActiveIntent(store);
+      if (!active) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No active intent. Create or switch to an intent first.",
+            },
+          ],
+          isError: true,
+          details: undefined,
+        };
+      }
+      const content = readLog(cwdRef, active.id);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: content || "(Log is empty)",
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "read_intent_understanding",
+    label: "Read Intent Understanding",
+    description:
+      "Read the understanding file for the active intent. This contains " +
+      "the session's current problem understanding, key discoveries, next " +
+      "steps needed, and open questions.",
+    parameters: Type.Object({}),
+    execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
+      const active = getActiveIntent(store);
+      if (!active) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No active intent. Create or switch to an intent first.",
+            },
+          ],
+          isError: true,
+          details: undefined,
+        };
+      }
+      const content = readUnderstanding(cwdRef, active.id);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: content || "(Understanding file is empty)",
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "read_verification_results",
+    label: "Read Verification Results",
+    description:
+      "Read the cached verification results for the active intent. Shows " +
+      "which commands passed or failed in the most recent verification run, " +
+      "with exit codes and output.",
+    parameters: Type.Object({}),
+    execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
+      const active = getActiveIntent(store);
+      if (!active) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No active intent. Create or switch to an intent first.",
+            },
+          ],
+          isError: true,
+          details: undefined,
+        };
+      }
+      const result = readVerification(cwdRef, active.id);
+      if (!result) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No verification results available yet.",
+            },
+          ],
+          isError: false,
+          details: undefined,
+        };
+      }
+
+      const summary = `Verification ran at: ${result.ranAt}\nOverall: ${
+        result.passed ? "PASSED" : "FAILED"
+      }\n\n`;
+      const commands = result.commands
+        .map(
+          (cmd) =>
+            `Command: ${cmd.command}\n` +
+            `Status: ${cmd.passed ? "✓ PASS" : "✗ FAIL"} (exit ${cmd.exitCode})\n` +
+            (cmd.output ? `Output:\n${cmd.output}\n` : ""),
+        )
+        .join("\n");
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: summary + commands,
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "switch_intent",
+    label: "Switch Intent",
+    description:
+      "Switch the active intent to a different intent by ID. This changes which " +
+      "intent's contract, understanding, and tools are active.",
+    parameters: Type.Object({
+      intentId: Type.String({
+        description: "The ID of the intent to switch to",
+      }),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+      const intent = store.intents.find((i) => i.id === params.intentId);
+      if (!intent) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `No intent found with ID: ${params.intentId}`,
+            },
+          ],
+          isError: true,
+          details: undefined,
+        };
+      }
+      store.activeIntentId = intent.id;
+      persist(cwdRef);
+      pi.events.emit("intent:active-changed", { id: intent.id });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Switched to intent: ${intent.title} (${intent.id})\nPhase: ${intent.phase}`,
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "propose_done",
+    label: "Propose Done",
+    description:
+      "Signal that you believe the current intent is complete. " +
+      "Call only after all success criteria are satisfied and verification passes. " +
+      "The orchestrator will route your proposal to the reviewer.",
+    parameters: Type.Object({
+      summary: Type.String({
+        description:
+          "Short summary of what was done and why it satisfies the contract.",
+      }),
+      artifacts: Type.Optional(
+        Type.Array(Type.String(), {
+          description: "Paths, test names, or other artefacts to inspect.",
+        }),
+      ),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+      const active = getActiveIntent(store);
+      if (!active || active.phase !== "implementing") {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No intent is currently in the implementing phase.",
+            },
+          ],
+          isError: true,
+          details: undefined,
+        };
+      }
+      pi.events.emit("orchestrator:proposal-signal", {
+        intentId: active.id,
+        summary: params.summary,
+        artifacts: params.artifacts ?? [],
+        proposedAt: new Date().toISOString(),
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Proposal submitted. The orchestrator will route it to review.",
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "spawn_child_intent",
+    label: "Spawn Child Intent",
+    description:
+      "Request a child intent for a blocking prerequisite. " +
+      "The orchestrator will pause the current intent until the child reaches done.",
+    parameters: Type.Object({
+      description: Type.String({
+        description: "Plain-language description of the prerequisite work.",
+      }),
+      reason: Type.String({
+        description:
+          "Why this is a prerequisite — what cannot proceed without it.",
+      }),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+      const active = getActiveIntent(store);
+      if (!active || active.phase !== "implementing") {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No intent is currently in the implementing phase.",
+            },
+          ],
+          isError: true,
+          details: undefined,
+        };
+      }
+      pi.events.emit("orchestrator:spawn-signal", {
+        intentId: active.id,
+        description: params.description,
+        reason: params.reason,
+        requestedAt: new Date().toISOString(),
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Child intent requested. The orchestrator will pause this intent until the child is done.",
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "ask_orchestrator",
+    label: "Ask Orchestrator",
+    description:
+      "Escalate a question you cannot answer from context. " +
+      "In the main session, prefer asking the user directly instead.",
+    parameters: Type.Object({
+      question: Type.String({ description: "Clear, answerable question." }),
+      context: Type.Optional(
+        Type.String({
+          description: "Background the orchestrator needs to answer.",
+        }),
+      ),
+    }),
+    execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "You are in the main session — the user is here. Ask them directly instead of using this tool.",
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "report_review",
+    label: "Report Review",
+    description:
+      "Submit a review verdict for the active intent. " +
+      "Call with verdict 'pass' only after actively hunting for problems and finding none. " +
+      "Call with 'rework' and concrete findings if any problems were found.",
+    parameters: Type.Object({
+      verdict: Type.Union([Type.Literal("pass"), Type.Literal("rework")], {
+        description: "'pass' if no problems found, 'rework' if problems exist",
+      }),
+      summary: Type.String({
+        description: "One-paragraph summary of the review",
+      }),
+      findings: Type.Array(Type.String(), {
+        description: "Concrete problems found (empty array for pass)",
+      }),
+      nextActions: Type.Array(Type.String(), {
+        description:
+          "Specific actions for the implementer to address each finding",
+      }),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+      const active = getActiveIntent(store);
+      if (!active || active.phase !== "reviewing") {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No intent is currently in the reviewing phase.",
+            },
+          ],
+          isError: true,
+          details: undefined,
+        };
+      }
+      pi.events.emit("orchestrator:review-signal", {
+        intentId: active.id,
+        verdict: params.verdict,
+        summary: params.summary,
+        findings: params.findings,
+        nextActions: params.nextActions,
+        reportedAt: new Date().toISOString(),
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Review verdict "${params.verdict}" submitted.`,
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "report_status",
+    label: "Report Status",
+    description:
+      "Report a one-line status message while reviewing. Shown live in the sidebar.",
+    parameters: Type.Object({
+      message: Type.String({
+        description:
+          "Brief status message (one line, e.g. 'Checking test coverage...')",
+      }),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+      panel?.updateStatus(params.message);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Status noted.",
+          },
+        ],
+        isError: false,
+        details: undefined,
+      };
+    },
+  });
 
   pi.registerCommand("intent", {
     description: "Create, switch, edit, lock, or delete intents",
     handler: async (_args, ctx) => {
-      const active = getActiveIntent(store);
-
-      const items: string[] = ["Create new intent"];
-      if (active) {
-        if (active.phase === "defining") {
-          items.push("Edit intent", "Lock intent (finish defining)");
-        }
-        items.push("Switch intent", "Delete intent");
-      } else if (store.intents.length > 0) {
-        items.push("Switch intent");
+      // Check if we're in an interactive session
+      if (!ctx.hasUI) {
+        ctx.ui.notify("/intent requires interactive mode", "error");
+        return;
       }
 
-      const action = await ctx.ui.select("Intent", items);
-      if (!action) return;
-
-      if (action === "Create new intent") await handleCreate(ctx);
-      else if (action === "Edit intent") await handleEdit(ctx);
-      else if (action === "Lock intent (finish defining)")
-        await handleLock(ctx);
-      else if (action === "Switch intent") await handleSwitch(ctx);
-      else if (action === "Delete intent") await handleDelete(ctx);
-
+      // Always show the overlay - it has all functionality built in
+      await showIntentOverlay(ctx);
       refreshPanel();
     },
   });
 
   // ── Command handlers ────────────────────────────────────────────────────
 
-  async function handleCreate(ctx: ExtensionCommandContext): Promise<void> {
-    const description = await ctx.ui.input(
-      "Describe your intent",
-      "e.g. Fix the auth bug in the login flow",
-    );
-    if (!description) return;
-    const intent = createIntent(store, ctx.cwd, description);
-    persist(ctx.cwd);
-    pi.events.emit("intent:created", { id: intent.id });
-    ctx.ui.notify(`Intent set: "${intent.title}"`, "info");
-  }
-
-  async function handleEdit(ctx: ExtensionCommandContext): Promise<void> {
-    const active = getActiveIntent(store);
-    if (!active) return;
-    if (active.phase !== "defining") {
+  async function handleEdit(
+    ctx: ExtensionCommandContext | ExtensionContext,
+    intentId?: string,
+  ): Promise<void> {
+    const intent = intentId
+      ? store.intents.find((i) => i.id === intentId)
+      : getActiveIntent(store);
+    if (!intent) return;
+    if (intent.phase !== "defining") {
       ctx.ui.notify(
-        `Intent is locked (${active.phase}). Cannot edit outside defining phase.`,
+        `Intent is locked (${intent.phase}). Cannot edit outside defining phase.`,
         "warning",
       );
       return;
     }
-    const current = loadIntentContent(ctx.cwd, active.id);
+    const current = loadIntentContent(ctx.cwd, intent.id);
     const updated = await ctx.ui.editor(
-      `Edit intent: ${active.title}`,
+      `Edit intent: ${intent.title}`,
       current,
     );
     if (!updated || updated === current) return;
-    saveIntentContent(ctx.cwd, active.id, updated);
-    active.updatedAt = Date.now();
+    saveIntentContent(ctx.cwd, intent.id, updated);
+    intent.updatedAt = Date.now();
     persist(ctx.cwd);
-    pi.events.emit("intent:updated", { id: active.id });
+    pi.events.emit("intent:updated", { id: intent.id });
     ctx.ui.notify("Intent updated", "info");
   }
 
-  async function handleLock(ctx: ExtensionCommandContext): Promise<void> {
-    const active = getActiveIntent(store);
-    if (!active || active.phase !== "defining") return;
+  async function handleLock(
+    ctx: ExtensionCommandContext | ExtensionContext,
+    intentId?: string,
+  ): Promise<void> {
+    const intent = intentId
+      ? store.intents.find((i) => i.id === intentId)
+      : getActiveIntent(store);
+    if (!intent || intent.phase !== "defining") return;
 
-    const content = loadIntentContent(ctx.cwd, active.id);
+    const content = loadIntentContent(ctx.cwd, intent.id);
     const result = validateIntentForLock(content);
     if (!result.valid) {
       ctx.ui.notify(
@@ -235,57 +1090,169 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    const from: IntentPhase = active.phase;
-    transitionPhase(store, active.id, "implementing");
+    const from: IntentPhase = intent.phase;
+    const isActiveIntent = store.activeIntentId === intent.id;
+
+    transitionPhase(store, intent.id, "implementing");
     persist(ctx.cwd);
     pi.events.emit("intent:phase-changed", {
-      id: active.id,
+      id: intent.id,
       from,
       to: "implementing",
     });
-    ctx.ui.notify(`Intent locked: "${active.title}"`, "info");
+    ctx.ui.notify(`Intent locked: "${intent.title}"`, "info");
+
+    // Start fresh session if this is the active intent (implementer agent will take over)
+    // Note: No post-switch work needed - function returns immediately after.
+    // If we needed to do work after the switch, we'd use withSession callback.
+    if (isActiveIntent && "newSession" in ctx) {
+      await ctx.newSession();
+    }
   }
 
-  async function handleSwitch(ctx: ExtensionCommandContext): Promise<void> {
-    if (store.intents.length === 0) {
-      ctx.ui.notify("No intents yet — create one first", "warning");
+  async function handleTransition(
+    ctx: ExtensionCommandContext | ExtensionContext,
+    intentId: string,
+    toPhase: IntentPhase,
+  ): Promise<void> {
+    const intent = store.intents.find((i) => i.id === intentId);
+    if (!intent) return;
+
+    const from: IntentPhase = intent.phase;
+    const isActiveIntent = store.activeIntentId === intentId;
+
+    try {
+      {
+        // Normal single transition
+        transitionPhase(store, intentId, toPhase);
+        persist(ctx.cwd);
+        pi.events.emit("intent:phase-changed", {
+          id: intentId,
+          from,
+          to: toPhase,
+        });
+        ctx.ui.notify(`Intent "${intent.title}" moved to ${toPhase}`, "info");
+
+        // Start fresh session when transitioning to implementing so the
+        // implementer subagent gets a clean context. Review runs in the
+        // current session via sendUserMessage, so no newSession there.
+        // Note: No post-switch work needed - function returns immediately after.
+        // If we needed to do work after the switch, we'd use withSession callback.
+        if (
+          isActiveIntent &&
+          toPhase === "implementing" &&
+          "newSession" in ctx
+        ) {
+          await ctx.newSession();
+        }
+      }
+    } catch (err) {
+      ctx.ui.notify((err as Error).message, "warning");
+    }
+  }
+
+  async function handleReview(
+    ctx: ExtensionCommandContext | ExtensionContext,
+    intentId: string,
+  ): Promise<void> {
+    const intent = store.intents.find((i) => i.id === intentId);
+    if (!intent) return;
+
+    if (intent.phase !== "reviewing") {
+      ctx.ui.notify(
+        `Cannot review: intent is in ${intent.phase} phase`,
+        "warning",
+      );
       return;
     }
-    const options = store.intents.map((i) => i.title);
-    const chosen = await ctx.ui.select("Switch to", options);
-    if (!chosen) return;
-    const intent = store.intents.find((i) => i.title === chosen);
-    if (!intent) return;
-    store.activeIntentId = intent.id;
-    persist(ctx.cwd);
-    pi.events.emit("intent:active-changed", { id: intent.id });
+
+    if (store.activeIntentId !== intentId) {
+      store.activeIntentId = intentId;
+      persist(ctx.cwd);
+      pi.events.emit("intent:active-changed", { id: intentId });
+    }
+
+    ctx.ui.notify(`Starting review for "${intent.title}"...`, "info");
+
+    // Re-emit the reviewing phase event so the orchestrator dispatches the reviewer agent.
+    // This works from both shortcut (ExtensionContext) and command (ExtensionCommandContext)
+    // contexts because it uses the event bus, not newSession().
+    pi.events.emit("intent:phase-changed", {
+      id: intentId,
+      from: "reviewing",
+      to: "reviewing",
+    });
   }
 
-  async function handleDelete(ctx: ExtensionCommandContext): Promise<void> {
-    const active = getActiveIntent(store);
-    if (!active) return;
+  async function handleDelete(
+    ctx: ExtensionCommandContext | ExtensionContext,
+    intentId?: string,
+  ): Promise<void> {
+    const intent = intentId
+      ? store.intents.find((i) => i.id === intentId)
+      : getActiveIntent(store);
+    if (!intent) return;
     const confirmed = await ctx.ui.confirm(
       "Delete intent",
-      `Delete "${active.title}"? This cannot be undone.`,
+      `Delete "${intent.title}"? This cannot be undone.`,
     );
     if (!confirmed) return;
     try {
-      deleteIntent(store, ctx.cwd, active.id);
+      deleteIntent(store, ctx.cwd, intent.id);
     } catch (err) {
       ctx.ui.notify((err as Error).message, "warning");
       return;
     }
     persist(ctx.cwd);
-    pi.events.emit("intent:deleted", { id: active.id });
+    pi.events.emit("intent:deleted", { id: intent.id });
   }
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────
 
 function shortDesc(content: string): string | null {
-  const first = content
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.length > 0 && !l.startsWith("#"));
-  return first ?? null;
+  const lines = content.split("\n");
+  let inDescription = false;
+  const descriptionLines: string[] = [];
+
+  for (const line of lines) {
+    if (!inDescription) {
+      if (/^##\s+Description\s*$/i.test(line.trim())) {
+        inDescription = true;
+      }
+      continue;
+    }
+
+    if (/^##\s+/.test(line)) {
+      break;
+    }
+
+    descriptionLines.push(line);
+  }
+
+  const description = descriptionLines.join("\n").trim();
+  if (description) {
+    return description;
+  }
+
+  const fallbackLines: string[] = [];
+  let started = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!started) {
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      started = true;
+      fallbackLines.push(line);
+      continue;
+    }
+
+    if (!trimmed || trimmed.startsWith("#")) {
+      break;
+    }
+
+    fallbackLines.push(line);
+  }
+
+  const fallback = fallbackLines.join("\n").trim();
+  return fallback || null;
 }

@@ -1,0 +1,176 @@
+{
+  "activeIntentId": "5731f5dd-fdb4-4289-80bc-1ca01ede2a0f",
+  "intents": [
+    {
+      "id": "4a3df6df-ab67-4652-be59-baebb620f1dd",
+      "title": "Create intent system for our loadout",
+      "createdAt": 1775123440576,
+      "updatedAt": 1775123440576,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "2f011b6d-4cb9-4b00-9bd4-17a240acd589",
+      "title": "Secondary intent example",
+      "createdAt": 1775123474846,
+      "updatedAt": 1775123474846,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "8ebae85d-d0b4-48a4-8099-e383d0bb78e3",
+      "title": "Improve the intent sidebar to provide more",
+      "createdAt": 1776853326555,
+      "updatedAt": 1776853326555,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "54badd46-ccee-4152-b4ef-de992eaa90a1",
+      "title": "Automatically load the active intent contract into",
+      "createdAt": 1776853552329,
+      "updatedAt": 1776853552329,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "31dd982c-ed0d-4a12-a1f7-19ac82acc1f3",
+      "title": "Add programmatic tools for ai assistant to",
+      "createdAt": 1776853641049,
+      "updatedAt": 1776853641049,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "1ecdf543-8d81-471d-b329-d5f180c8f3db",
+      "title": "We need a new intent management overlay",
+      "createdAt": 1776855434689,
+      "updatedAt": 1776932471548,
+      "parentId": null,
+      "phase": "implementing",
+      "reworkCount": 1
+    },
+    {
+      "id": "ce94d08e-a2c5-41cb-ae90-3b5cf92b6b27",
+      "title": "I see Markdown being written into the",
+      "createdAt": 1776855882205,
+      "updatedAt": 1776855882205,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "9b6bb288-0484-442c-91aa-e296e3378161",
+      "title": "The sidebar should be resizable with the",
+      "createdAt": 1776855907208,
+      "updatedAt": 1776855907208,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "c35559e7-16b5-4eb7-a925-190471d92907",
+      "title": "Intents should have a priority. And we",
+      "createdAt": 1776855949442,
+      "updatedAt": 1776855949442,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "c89791e5-608d-4773-b1df-4b593c5b55eb",
+      "title": "Each session should be able to have",
+      "createdAt": 1776856133417,
+      "updatedAt": 1776856133417,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "3322334f-eeb4-4f4a-9d30-706e139e1374",
+      "title": "Fix bug pasting images into Pi is",
+      "createdAt": 1776856340898,
+      "updatedAt": 1776856340898,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "ad06b8b7-f317-47f3-8cb4-8e2162d1606a",
+      "title": "When creating the intent, we should have",
+      "createdAt": 1776856376633,
+      "updatedAt": 1776856376633,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "db1159c0-f73e-4fcf-b735-da8177465c98",
+      "title": "Success criteria should get its own section",
+      "createdAt": 1776856741084,
+      "updatedAt": 1776856741084,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "8d17fa38-7e32-4a55-bc60-29b93d505c61",
+      "title": "The ask dialogue should support Markdown. so",
+      "createdAt": 1776856812224,
+      "updatedAt": 1776856812224,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "77d0d804-cf67-475f-8373-b0def8c4757c",
+      "title": "In the Ask dialog box, it's not",
+      "createdAt": 1776857022827,
+      "updatedAt": 1776857022827,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "b970d268-176c-4c96-9475-226f34f6d555",
+      "title": "It's not clear how you switch from",
+      "createdAt": 1776858158168,
+      "updatedAt": 1776858158168,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "e609fe06-6dd3-4029-86c6-19755d1b5f23",
+      "title": "intents should each have their own worktrees",
+      "createdAt": 1776862953230,
+      "updatedAt": 1776862953230,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "5731f5dd-fdb4-4289-80bc-1ca01ede2a0f",
+      "title": "GTFO extension that monitors tokens and tries to wrap thi...",
+      "createdAt": 1776933399577,
+      "updatedAt": 1776933399577,
+      "parentId": null,
+      "phase": "defining",
+      "reworkCount": 0
+    },
+    {
+      "id": "0393e2ca-25ba-4311-8bdf-bed196743287",
+      "title": "extention inspired by caveman to reduce output tokens wit...",
+      "createdAt": 1776933448778,
+      "updatedAt": 1776955468725,
+      "parentId": null,
+      "phase": "done",
+      "reworkCount": 4
+    }
+  ]
+}

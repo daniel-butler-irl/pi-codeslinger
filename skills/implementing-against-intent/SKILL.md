@@ -1,6 +1,6 @@
 ---
 name: implementing-against-intent
-description: Use this skill when implementing code changes against a locked intent contract. Enforces that work stays within scope, the contract is never edited, discoveries land in the log, and known failure modes are actively avoided.
+description: Use when implementing code changes against a locked intent contract.
 ---
 
 # Implementing against a locked intent
@@ -12,6 +12,37 @@ Attempting to write to the intent's `intent.md` file will be blocked by
 the extension with a clear error. If you believe the contract is wrong,
 stop and call `ask_orchestrator` with the specific conflict — do not
 try to work around the lock.
+
+## Session Understanding
+
+When you start a session with an active intent, you will receive an
+`intent:active-on-start` event. **Immediately** use the `update_understanding`
+tool to record your understanding of:
+
+1. **Problem**: What needs to be done (read from the contract)
+2. **Current state**: What you learned by examining the code
+3. **Next steps**: Concrete actions you plan to take
+4. **Open questions**: Anything unclear that needs clarification
+
+This understanding persists across sessions and appears in the Intent
+sidebar. Update it whenever your understanding evolves or you make
+significant progress. This is your durable memory — use it.
+
+Example:
+
+```
+Problem: Add JWT rotation middleware per intent contract
+
+Current state: Found existing auth at src/auth/, UserService handles
+rates, no JWT code exists yet.
+
+Next steps:
+1. Create src/auth/jwt.ts with rotation middleware
+2. Add tests in src/auth/__tests__/rotation.test.ts
+3. Wire into app.ts router
+
+Open questions: None yet
+```
 
 ## Workflow
 

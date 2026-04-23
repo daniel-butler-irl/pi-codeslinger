@@ -166,37 +166,62 @@ describe("spawn_child_intent tool", () => {
 });
 
 describe("protocolToolsForRole", () => {
-  test("implementer gets propose_done, ask_orchestrator, spawn_child_intent", () => {
-    const tools = protocolToolsForRole(newFlight("i"), "implementer");
+  test("implementer gets all common tools plus propose_done", () => {
+    const tools = protocolToolsForRole(newFlight("i"), "implementer", "/cwd");
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
       "ask_orchestrator",
+      "list_intents",
       "propose_done",
+      "read_intent",
+      "read_intent_log",
+      "read_intent_understanding",
+      "read_verification_results",
       "spawn_child_intent",
     ]);
   });
 
-  test("reviewer gets report_review + ask_orchestrator + spawn_child_intent (no propose_done)", () => {
-    const tools = protocolToolsForRole(newFlight("i"), "reviewer");
+  test("reviewer gets all common tools plus report_review (no propose_done)", () => {
+    const tools = protocolToolsForRole(newFlight("i"), "reviewer", "/cwd");
     const names = tools.map((t) => t.name).sort();
     assert.deepEqual(names, [
       "ask_orchestrator",
+      "list_intents",
+      "read_intent",
+      "read_intent_log",
+      "read_intent_understanding",
+      "read_verification_results",
       "report_review",
+      "report_status",
       "spawn_child_intent",
     ]);
   });
 
   test("researcher and planner match implementer's tool set", () => {
-    const researcher = protocolToolsForRole(newFlight("i"), "researcher");
-    const planner = protocolToolsForRole(newFlight("i"), "planner");
+    const researcher = protocolToolsForRole(
+      newFlight("i"),
+      "researcher",
+      "/cwd",
+    );
+    const planner = protocolToolsForRole(newFlight("i"), "planner", "/cwd");
     assert.deepEqual(researcher.map((t) => t.name).sort(), [
       "ask_orchestrator",
+      "list_intents",
       "propose_done",
+      "read_intent",
+      "read_intent_log",
+      "read_intent_understanding",
+      "read_verification_results",
       "spawn_child_intent",
     ]);
     assert.deepEqual(planner.map((t) => t.name).sort(), [
       "ask_orchestrator",
+      "list_intents",
       "propose_done",
+      "read_intent",
+      "read_intent_log",
+      "read_intent_understanding",
+      "read_verification_results",
       "spawn_child_intent",
     ]);
   });

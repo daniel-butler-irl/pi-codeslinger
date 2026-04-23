@@ -1,20 +1,29 @@
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createAskDialog } from "./dialog.js";
-import type { Question, DialogOutcome } from "./dialog.js";
+import type { Question, DialogOutcome, ImageAttachment } from "./dialog.js";
 
 export default function (pi: ExtensionAPI) {
+  pi.on("before_agent_start", (_event, ctx) => {
+    const base = ctx.getSystemPrompt();
+    return {
+      systemPrompt: `${base}
+
+## Interactive Questions
+
+Call \`ask_user\` when the user needs to decide, clarify, or provide information only they have. Ask early rather than assuming. Prefer \`single\`/\`multi\` with concrete options over free-form \`text\`. If a clarification has several parts, split each part into its own entry in the \`questions\` array — never pack a numbered list into one text prompt.`,
+    };
+  });
+
   pi.registerTool({
     name: "ask_user",
     label: "Ask User",
     description:
       "Present one or more questions to the user in an interactive dialog and wait for answers before continuing. Use this when you need clarification or a decision from the user.",
     promptGuidelines: [
-      "Use ask_user when you need information from the user before proceeding.",
       "Each question must have a unique id.",
-      "Use type 'single' when the user must pick exactly one option from a fixed list — always provide options.",
-      "Use type 'multi' when the user may select multiple options from a fixed list — always provide options.",
-      "Use type 'text' only for fully open-ended questions with no predefined options. Never combine type 'text' with an options list.",
+      "Use 'single' or 'multi' with an options list whenever the choices are finite. Use 'text' only when the answer is truly open-ended, and never combine 'text' with options.",
+      "When a user ask has several parts, emit one question per part. Bad: one 'text' question whose body is '1) ... 2) ... 3) ...'. Good: a 'single' question with options for the decision, then follow-ups for the rest.",
       "Always handle a cancelled result gracefully.",
     ],
     parameters: Type.Object({
@@ -90,8 +99,26 @@ export default function (pi: ExtensionAPI) {
         { overlay: true },
       );
 
+      // Handle images in the result
+      const content: Array<
+        | { type: "text"; text: string }
+        | { type: "image"; data: string; mimeType: string }
+      > = [{ type: "text", text: JSON.stringify(outcome) }];
+
+      if (!outcome.cancelled && outcome.images && outcome.images.length > 0) {
+        for (const img of outcome.images) {
+          // Convert Uint8Array to base64
+          const base64 = Buffer.from(img.bytes).toString("base64");
+          content.push({
+            type: "image",
+            data: base64,
+            mimeType: img.mimeType,
+          });
+        }
+      }
+
       return {
-        content: [{ type: "text", text: JSON.stringify(outcome) }],
+        content,
         details: outcome,
       };
     },

@@ -57,6 +57,7 @@ function mockPi() {
           (handlers.get(event) ?? []).forEach((h) => h(payload));
         },
       },
+      sendUserMessage: async (_msg: string) => {},
     } as any,
     getHandlers: (event: string) => handlers.get(event) ?? [],
   };
@@ -221,6 +222,7 @@ describe("OrchestratorDriver — reviewer pass moves to done", () => {
               kind: "review",
               intentId: id,
               verdict: "pass",
+              summary: "All success criteria met. No issues found.",
               findings: [],
               nextActions: [],
               reportedAt: new Date().toISOString(),
@@ -240,7 +242,7 @@ describe("OrchestratorDriver — reviewer pass moves to done", () => {
 
       const store = loadStore(cwd);
       const after = store.intents.find((i) => i.id === id)!;
-      assert.equal(after.phase, "done");
+      assert.equal(after.phase, "proposed-ready");
     });
   });
 });
@@ -272,6 +274,7 @@ describe("OrchestratorDriver — reviewer rework increments and returns", () => 
               kind: "review",
               intentId: id,
               verdict: "rework",
+              summary: "Edge case X is not covered and needs a test.",
               findings: ["Missing edge case X"],
               nextActions: ["Add test for X"],
               reportedAt: new Date().toISOString(),
@@ -357,9 +360,10 @@ describe("OrchestratorDriver — child done resumes parent", () => {
       // the resume-parent branch.
       const midStore = loadStore(cwd);
       const childTarget = midStore.intents.find((i) => i.id === child.id)!;
-      // Legal path: defining → implementing → reviewing → done
+      // Legal path: defining → implementing → reviewing → proposed-ready → done
       transitionPhase(midStore, child.id, "implementing");
       transitionPhase(midStore, child.id, "reviewing");
+      transitionPhase(midStore, child.id, "proposed-ready");
       transitionPhase(midStore, child.id, "done");
       saveStore(cwd, midStore);
 
@@ -481,6 +485,7 @@ describe("OrchestratorDriver — rework cap", () => {
               kind: "review",
               intentId: id,
               verdict: "rework",
+              summary: "Still broken.",
               findings: ["still broken"],
               nextActions: [],
               reportedAt: new Date().toISOString(),
@@ -504,6 +509,179 @@ describe("OrchestratorDriver — rework cap", () => {
       assert.equal(after.phase, "implementing");
       assert.equal(after.reworkCount, 5);
       assert.ok(readLog(cwd, id).includes("escalation"));
+    });
+  });
+});
+
+describe("OrchestratorDriver — main-chat reviewer path", () => {
+  test("review-signal event transitions to proposed-ready on pass", async () => {
+    await withTempDir(async (cwd) => {
+      const { id } = seedIntentAtImplementing(cwd);
+
+      const { pi } = mockPi();
+      const defs = new Map([
+        ["intent-implementer", makeDef("intent-implementer")],
+        [
+          "intent-reviewer",
+          {
+            name: "intent-reviewer",
+            description: "main-chat reviewer (no provider/model)",
+            tools: ["read"],
+            systemPrompt: "Review this.",
+          } as AgentDefinition,
+        ],
+      ]);
+
+      const dispatch = async (
+        d: DispatchOptions,
+      ): Promise<DispatchedAgentHandle> => {
+        if (d.role === "implementer") {
+          return scriptedAgent(
+            "implementer",
+            [
+              {
+                signal: {
+                  kind: "proposal",
+                  agentRole: "implementer",
+                  intentId: id,
+                  summary: "done",
+                  artifacts: [],
+                  proposedAt: new Date().toISOString(),
+                },
+              },
+            ],
+            d.flight,
+          );
+        }
+        throw new Error("Reviewer should not be dispatched as subagent");
+      };
+
+      const driver = new OrchestratorDriver(
+        pi,
+        cwd,
+        {} as any,
+        {} as any,
+        defs,
+        { maxReworkPerIntent: 5 },
+        { implementer: "intent-implementer", reviewer: "intent-reviewer" },
+        dispatch,
+      );
+      driver.start();
+
+      // Implementer proposes done → phase moves to reviewing.
+      pi.events.emit("intent:phase-changed", {
+        id,
+        from: "defining",
+        to: "implementing",
+      });
+      for (let i = 0; i < 6; i++) {
+        await new Promise((r) => setImmediate(r));
+      }
+
+      const midStore = loadStore(cwd);
+      assert.equal(
+        midStore.intents.find((i) => i.id === id)!.phase,
+        "reviewing",
+      );
+
+      // Simulate the main-chat AI calling report_review → emits review-signal.
+      pi.events.emit("orchestrator:review-signal", {
+        intentId: id,
+        verdict: "pass",
+        summary: "All success criteria met. No issues found.",
+        findings: [],
+        nextActions: [],
+        reportedAt: new Date().toISOString(),
+      });
+      for (let i = 0; i < 4; i++) {
+        await new Promise((r) => setImmediate(r));
+      }
+
+      const afterStore = loadStore(cwd);
+      assert.equal(
+        afterStore.intents.find((i) => i.id === id)!.phase,
+        "proposed-ready",
+      );
+    });
+  });
+});
+
+describe("OrchestratorDriver — main-chat implementer path", () => {
+  test("proposal-signal event transitions implementing → reviewing", async () => {
+    await withTempDir(async (cwd) => {
+      const { id } = seedIntentAtImplementing(cwd);
+
+      const { pi } = mockPi();
+      const defs = new Map([
+        [
+          "intent-implementer",
+          {
+            name: "intent-implementer",
+            description: "main-chat implementer (no provider/model)",
+            tools: [],
+            systemPrompt: "Implement this.",
+          } as AgentDefinition,
+        ],
+        [
+          "intent-reviewer",
+          {
+            name: "intent-reviewer",
+            description: "main-chat reviewer (no provider/model)",
+            tools: [],
+            systemPrompt: "Review this.",
+          } as AgentDefinition,
+        ],
+      ]);
+
+      const dispatch = async (): Promise<DispatchedAgentHandle> => {
+        throw new Error("No agent should be dispatched in main-chat mode");
+      };
+
+      const driver = new OrchestratorDriver(
+        pi,
+        cwd,
+        {} as any,
+        {} as any,
+        defs,
+        { maxReworkPerIntent: 5 },
+        { implementer: "intent-implementer", reviewer: "intent-reviewer" },
+        dispatch,
+      );
+      driver.start();
+
+      pi.events.emit("intent:phase-changed", {
+        id,
+        from: "defining",
+        to: "implementing",
+      });
+      for (let i = 0; i < 4; i++) {
+        await new Promise((r) => setImmediate(r));
+      }
+
+      // Phase still implementing — waiting for main-chat AI to call propose_done.
+      const midStore = loadStore(cwd);
+      assert.equal(
+        midStore.intents.find((i) => i.id === id)!.phase,
+        "implementing",
+      );
+
+      // Simulate the main-chat AI calling propose_done → emits proposal-signal.
+      pi.events.emit("orchestrator:proposal-signal", {
+        intentId: id,
+        summary: "All done.",
+        artifacts: [],
+        proposedAt: new Date().toISOString(),
+      });
+      for (let i = 0; i < 4; i++) {
+        await new Promise((r) => setImmediate(r));
+      }
+
+      const afterStore = loadStore(cwd);
+      assert.equal(
+        afterStore.intents.find((i) => i.id === id)!.phase,
+        "reviewing",
+      );
+      assert.ok(readLog(cwd, id).includes("proposal"));
     });
   });
 });

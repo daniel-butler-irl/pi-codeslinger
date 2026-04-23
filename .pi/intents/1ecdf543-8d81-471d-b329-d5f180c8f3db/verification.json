@@ -1,0 +1,36 @@
+{
+  "ranAt": "2026-04-23T08:41:12.432Z",
+  "passed": false,
+  "commands": [
+    {
+      "command": "grep -q \"ctx.ui.custom\" extensions/intent/index.ts",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "grep -q \"registerKeybinding\\|keybinding\" extensions/intent/index.ts",
+      "exitCode": 1,
+      "passed": false,
+      "output": ""
+    },
+    {
+      "command": "grep -q \"separateAgent\\|spawn\\|fork\" extensions/intent/*.ts",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "grep -q \"Ctrl.*manage\\|hotkey.*hint\" extensions/intent/panel.ts",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "npm test -- extensions/intent",
+      "exitCode": 9,
+      "passed": false,
+      "output": "> pi-codeslinger@1.0.0 test\n> node --experimental-strip-types --test extensions/**/*.test.ts \"extensions/intent\"\nnode: bad option: --experimental-strip-types\nnode: bad option: --test"
+    }
+  ]
+}

@@ -4,11 +4,12 @@
  * Replaces Pi's verbose keyboard-shortcut welcome screen with a single compact
  * line showing the project directory and current git branch.
  *
- *   pi  ~/IdeaProjects/public/pi-codeslinger  (main)
+ *   pi  ~/IdeaProjects/public/pi-codeslinger  (main)  [TERSE]
  */
 import { execSync } from "child_process";
 import { homedir } from "os";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { isTerseEnabled } from "../terse/index.ts";
 
 function gitBranch(cwd: string): string {
   try {
@@ -44,7 +45,17 @@ export default function (pi: ExtensionAPI) {
           const branch = gitBranch(cwd);
           const path = shortenPath(cwd);
           const branchPart = branch ? dim("  (" + branch + ")") : "";
-          return [" " + bold(accent("pi")) + "  " + dim(path) + branchPart];
+          const terseBadge = isTerseEnabled()
+            ? dim("  [") + accent("TERSE") + dim("]")
+            : "";
+          return [
+            " " +
+              bold(accent("pi")) +
+              "  " +
+              dim(path) +
+              branchPart +
+              terseBadge,
+          ];
         },
         invalidate() {},
       };

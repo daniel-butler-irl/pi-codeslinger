@@ -25,6 +25,7 @@ import {
   intentContractPath,
   intentLogPath,
   intentVerificationPath,
+  writeReviewResult,
   type IntentStore,
   type Intent,
 } from "../intent/store.ts";
@@ -78,6 +79,10 @@ export class OrchestratorDriver {
   private readonly config: DriverConfig;
   private readonly binding: AgentBinding;
   private readonly dispatch: DispatchFn;
+  private unsubscribePhaseChange: (() => void) | null = null;
+  private unsubscribeReviewSignal: (() => void) | null = null;
+  private unsubscribeProposalSignal: (() => void) | null = null;
+  private unsubscribeSpawnSignal: (() => void) | null = null;
 
   constructor(
     pi: ExtensionAPI,
@@ -103,17 +108,62 @@ export class OrchestratorDriver {
    * Wire up event subscriptions. Call once at session_start.
    */
   start(): void {
-    this.pi.events.on("intent:phase-changed", (payload: unknown) => {
-      this.onPhaseChanged(payload as PhaseChangedPayload).catch((err) =>
-        this.logDriverError(err),
-      );
-    });
+    this.unsubscribePhaseChange = this.pi.events.on(
+      "intent:phase-changed",
+      (payload: unknown) => {
+        this.onPhaseChanged(payload as PhaseChangedPayload).catch((err) =>
+          this.logDriverError(err),
+        );
+      },
+    );
+    this.unsubscribeReviewSignal = this.pi.events.on(
+      "orchestrator:review-signal",
+      (payload: unknown) => {
+        this.onReviewSignal(payload as ReviewSignalPayload).catch((err) =>
+          this.logDriverError(err),
+        );
+      },
+    );
+    this.unsubscribeProposalSignal = this.pi.events.on(
+      "orchestrator:proposal-signal",
+      (payload: unknown) => {
+        this.onProposalSignal(payload as ProposalSignalPayload).catch((err) =>
+          this.logDriverError(err),
+        );
+      },
+    );
+    this.unsubscribeSpawnSignal = this.pi.events.on(
+      "orchestrator:spawn-signal",
+      (payload: unknown) => {
+        this.onSpawnSignal(payload as SpawnSignalPayload).catch((err) =>
+          this.logDriverError(err),
+        );
+      },
+    );
   }
 
   /**
    * Tear everything down (called on session shutdown or test cleanup).
    */
   async shutdown(): Promise<void> {
+    if (this.unsubscribePhaseChange) {
+      this.unsubscribePhaseChange();
+      this.unsubscribePhaseChange = null;
+    }
+    if (this.unsubscribeReviewSignal) {
+      this.unsubscribeReviewSignal();
+      this.unsubscribeReviewSignal = null;
+    }
+    if (this.unsubscribeProposalSignal) {
+      this.unsubscribeProposalSignal();
+      this.unsubscribeProposalSignal = null;
+    }
+    if (this.unsubscribeSpawnSignal) {
+      this.unsubscribeSpawnSignal();
+      this.unsubscribeSpawnSignal = null;
+    }
+
+    // Dispose all active agents
     for (const flight of this.flights.all()) {
       await this.flights.remove(flight.intentId);
     }
@@ -185,11 +235,58 @@ export class OrchestratorDriver {
     intent: Intent,
   ): Promise<void> {
     const flight = this.flights.getOrCreate(intent.id);
-    const impl = await this.ensureAgent(flight, "implementer");
 
-    const prompt = this.buildImplementerPrompt(intent, flight);
-    await impl.prompt(prompt);
+    const defName = this.definitionNameFor("implementer");
+    const def = this.agentDefs.get(defName);
 
+    if (def?.provider && def?.model) {
+      // Subagent path: dispatch a dedicated implementer agent.
+      const impl = await this.ensureAgent(flight, "implementer");
+      await impl.prompt(this.buildImplementerPrompt(intent, flight));
+      await this.handleSignal(store, intent, flight);
+    } else {
+      // Main-chat path: inject the implementation task into the current session.
+      // The implementer calls propose_done (a Pi tool in index.ts) which
+      // emits "orchestrator:proposal-signal" and routes through onProposalSignal.
+      await this.pi.sendUserMessage(
+        this.buildImplementerPrompt(intent, flight),
+      );
+    }
+  }
+
+  private async onProposalSignal(
+    payload: ProposalSignalPayload,
+  ): Promise<void> {
+    const store = loadStore(this.cwd);
+    const intent = store.intents.find((i) => i.id === payload.intentId);
+    if (!intent) return;
+
+    const flight = this.flights.getOrCreate(payload.intentId);
+    flight.pendingSignal = {
+      kind: "proposal",
+      agentRole: "implementer",
+      intentId: payload.intentId,
+      summary: payload.summary,
+      artifacts: payload.artifacts,
+      proposedAt: payload.proposedAt,
+    };
+    await this.handleSignal(store, intent, flight);
+  }
+
+  private async onSpawnSignal(payload: SpawnSignalPayload): Promise<void> {
+    const store = loadStore(this.cwd);
+    const intent = store.intents.find((i) => i.id === payload.intentId);
+    if (!intent) return;
+
+    const flight = this.flights.getOrCreate(payload.intentId);
+    flight.pendingSignal = {
+      kind: "spawn-child",
+      agentRole: "implementer",
+      parentIntentId: payload.intentId,
+      description: payload.description,
+      reason: payload.reason,
+      requestedAt: payload.requestedAt,
+    };
     await this.handleSignal(store, intent, flight);
   }
 
@@ -234,7 +331,14 @@ export class OrchestratorDriver {
   ): Promise<void> {
     const flight = this.flights.getOrCreate(intent.id);
 
-    // Run verification first — the reviewer consumes this as evidence.
+    const intentId = intent.id;
+    flight.onStatus = (message: string) => {
+      this.pi.events.emit("orchestrator:reviewer-status", {
+        intentId,
+        message,
+      });
+    };
+
     const verif = runVerification(this.cwd, intent.id);
     appendLogEntry(this.cwd, intent.id, {
       kind: "verification",
@@ -243,9 +347,37 @@ export class OrchestratorDriver {
         : "Verification failed. See verification.json.",
     });
 
-    const reviewer = await this.ensureAgent(flight, "reviewer");
-    await reviewer.prompt(this.buildReviewerPrompt(intent));
+    const defName = this.definitionNameFor("reviewer");
+    const def = this.agentDefs.get(defName);
 
+    if (def?.provider && def?.model) {
+      // Subagent path: dispatch a dedicated reviewer agent.
+      const reviewer = await this.ensureAgent(flight, "reviewer");
+      await reviewer.prompt(this.buildReviewerPrompt(intent));
+      await this.handleSignal(store, intent, flight);
+    } else {
+      // Main-chat path: inject the review task into the current session.
+      // The reviewer calls report_review (a Pi tool in index.ts) which
+      // emits "orchestrator:review-signal" and routes through onReviewSignal.
+      await this.pi.sendUserMessage(this.buildReviewerPrompt(intent));
+    }
+  }
+
+  private async onReviewSignal(payload: ReviewSignalPayload): Promise<void> {
+    const store = loadStore(this.cwd);
+    const intent = store.intents.find((i) => i.id === payload.intentId);
+    if (!intent) return;
+
+    const flight = this.flights.getOrCreate(payload.intentId);
+    flight.pendingSignal = {
+      kind: "review",
+      intentId: payload.intentId,
+      verdict: payload.verdict,
+      summary: payload.summary,
+      findings: payload.findings,
+      nextActions: payload.nextActions,
+      reportedAt: payload.reportedAt,
+    };
     await this.handleSignal(store, intent, flight);
   }
 
@@ -314,15 +446,27 @@ export class OrchestratorDriver {
           signal.findings.map((f) => `- ${f}`).join("\n"),
       });
       if (signal.verdict === "pass") {
-        transitionPhase(store, intent.id, "done");
+        writeReviewResult(this.cwd, intent.id, {
+          verdict: "pass",
+          summary: signal.summary,
+          reviewedAt: signal.reportedAt,
+        });
+        transitionPhase(store, intent.id, "proposed-ready");
         saveStore(this.cwd, store);
         this.pi.events.emit("intent:phase-changed", {
           id: intent.id,
           from: "reviewing",
-          to: "done",
+          to: "proposed-ready",
         } satisfies PhaseChangedPayload);
         return;
       }
+
+      // Write the rework result so the sidebar shows what the reviewer found.
+      writeReviewResult(this.cwd, intent.id, {
+        verdict: "rework",
+        summary: signal.summary,
+        reviewedAt: signal.reportedAt,
+      });
 
       // Rework: cap check, then send back to implementer.
       if (intent.reworkCount >= this.config.maxReworkPerIntent) {
@@ -463,4 +607,27 @@ interface PhaseChangedPayload {
   id: string;
   from: string;
   to: string;
+}
+
+interface ReviewSignalPayload {
+  intentId: string;
+  verdict: "pass" | "rework";
+  summary: string;
+  findings: string[];
+  nextActions: string[];
+  reportedAt: string;
+}
+
+interface ProposalSignalPayload {
+  intentId: string;
+  summary: string;
+  artifacts: string[];
+  proposedAt: string;
+}
+
+interface SpawnSignalPayload {
+  intentId: string;
+  description: string;
+  reason: string;
+  requestedAt: string;
 }

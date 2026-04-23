@@ -29,6 +29,7 @@ import {
   intentContractPath,
   intentDir,
   intentLogPath,
+  intentUnderstandingPath,
   intentVerificationPath,
   getChildren,
   getParent,
@@ -38,6 +39,8 @@ import {
   transitionPhase,
   appendLogEntry,
   readLog,
+  readUnderstanding,
+  writeUnderstanding,
   writeVerification,
   readVerification,
   type Intent,
@@ -321,8 +324,11 @@ describe("phase transitions", () => {
     ["defining", "blocked-on-child"],
     ["implementing", "reviewing"],
     ["implementing", "blocked-on-child"],
+    ["implementing", "done"],
     ["reviewing", "implementing"],
-    ["reviewing", "done"],
+    ["reviewing", "proposed-ready"],
+    ["proposed-ready", "done"],
+    ["proposed-ready", "implementing"],
     ["blocked-on-child", "defining"],
     ["blocked-on-child", "implementing"],
   ];
@@ -330,10 +336,12 @@ describe("phase transitions", () => {
   const illegal: Array<[IntentPhase, IntentPhase]> = [
     ["defining", "done"],
     ["defining", "reviewing"],
-    ["implementing", "done"],
     ["implementing", "defining"],
+    ["reviewing", "done"],
     ["reviewing", "defining"],
     ["reviewing", "blocked-on-child"],
+    ["proposed-ready", "defining"],
+    ["proposed-ready", "reviewing"],
     ["done", "defining"],
     ["done", "implementing"],
   ];
@@ -508,6 +516,37 @@ describe("log and verification helpers", () => {
   test("intentLogPath returns the log location inside the intent dir", () => {
     withTempDir((cwd) => {
       assert.ok(intentLogPath(cwd, "abc").endsWith(join("abc", "log.md")));
+    });
+  });
+
+  test("intentUnderstandingPath returns the understanding location", () => {
+    withTempDir((cwd) => {
+      assert.ok(
+        intentUnderstandingPath(cwd, "abc").endsWith(
+          join("abc", "understanding.md"),
+        ),
+      );
+    });
+  });
+
+  test("writeUnderstanding + readUnderstanding round-trip", () => {
+    withTempDir((cwd) => {
+      const store = loadStore(cwd);
+      const intent = createIntent(store, cwd, "work");
+      const understanding = `Problem: Add JWT auth
+
+Next steps:
+1. Create middleware
+2. Add tests`;
+      writeUnderstanding(cwd, intent.id, understanding);
+      assert.ok(existsSync(intentUnderstandingPath(cwd, intent.id)));
+      assert.equal(readUnderstanding(cwd, intent.id), understanding);
+    });
+  });
+
+  test("readUnderstanding returns empty string when no file exists", () => {
+    withTempDir((cwd) => {
+      assert.equal(readUnderstanding(cwd, "nonexistent"), "");
     });
   });
 });

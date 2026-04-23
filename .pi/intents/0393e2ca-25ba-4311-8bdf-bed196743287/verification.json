@@ -1,0 +1,72 @@
+{
+  "ranAt": "2026-04-23T14:12:14.104Z",
+  "passed": false,
+  "commands": [
+    {
+      "command": "test -f extensions/terse/index.ts",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "test -f extensions/terse/terse.SKILL.md",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "test -f extensions/terse/index.test.ts",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "test -f extensions/terse/README.md",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "grep -q \"terse\" extensions/orchestrator/agents/intent-implementer.md",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "grep -q \"terse\" extensions/orchestrator/agents/intent-reviewer.md",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "grep -q \"ctrl+t\\|Ctrl+T\" extensions/terse/index.ts",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "grep -q 'registerCommand.*\"terse\"' extensions/terse/index.ts",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "grep -q \"appendSystemPrompt\\|terse\" extensions/terse/index.ts",
+      "exitCode": 0,
+      "passed": true,
+      "output": ""
+    },
+    {
+      "command": "npm test",
+      "exitCode": 9,
+      "passed": false,
+      "output": "> pi-codeslinger@1.0.0 test\n> node --experimental-strip-types --test extensions/**/*.test.ts\nnode: bad option: --experimental-strip-types\nnode: bad option: --test"
+    },
+    {
+      "command": "npm run build",
+      "exitCode": 1,
+      "passed": false,
+      "output": "npm ERR! Missing script: \"build\"\nnpm ERR! \nnpm ERR! To see a list of scripts, run:\nnpm ERR!   npm run\n\nnpm ERR! A complete log of this run can be found in:\nnpm ERR!     /Users/daniel/.npm/_logs/2026-04-23T14_12_14_843Z-debug-0.log"
+    }
+  ]
+}

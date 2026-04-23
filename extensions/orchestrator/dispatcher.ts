@@ -20,6 +20,7 @@ import {
   createBashTool,
   createEditTool,
   createWriteTool,
+  getAgentDir,
   type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import type { AgentDefinition } from "./agent-defs.ts";
@@ -94,6 +95,22 @@ export interface DispatchOptions {
 export async function dispatchAgent(
   opts: DispatchOptions,
 ): Promise<DispatchedAgentHandle> {
+  // Defensive check for cwd
+  if (!opts.cwd) {
+    throw new Error(
+      `dispatchAgent called with undefined cwd. ` +
+        `Agent: ${opts.definition.name}, Role: ${opts.role}. ` +
+        `This likely means the orchestrator driver was not properly initialized.`,
+    );
+  }
+
+  if (!opts.definition.provider || !opts.definition.model) {
+    throw new Error(
+      `Agent "${opts.definition.name}" has no provider/model configured. ` +
+        `Agents without provider/model run in the main chat session and ` +
+        `cannot be dispatched as subagents.`,
+    );
+  }
   const model = opts.modelRegistry.find(
     opts.definition.provider,
     opts.definition.model,
@@ -112,6 +129,7 @@ export async function dispatchAgent(
   // the agent definition's body.
   const loader = new DefaultResourceLoader({
     cwd: opts.cwd,
+    agentDir: getAgentDir(),
     systemPromptOverride: () => opts.definition.systemPrompt,
   });
   await loader.reload();
@@ -120,6 +138,7 @@ export async function dispatchAgent(
   const protocolTools: ToolDefinition[] = protocolToolsForRole(
     opts.flight,
     opts.role,
+    opts.cwd,
   );
 
   const { session } = await createAgentSession({

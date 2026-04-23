@@ -27,10 +27,16 @@ export interface AgentDefinition {
   name: string;
   /** One-line purpose statement. */
   description: string;
-  /** Provider id as Pi knows it (e.g. "openai", "google", "mistral"). */
-  provider: string;
-  /** Model id within the provider (e.g. "gpt-4o"). */
-  model: string;
+  /**
+   * Provider id as Pi knows it (e.g. "ibm-bob", "openai").
+   * Omit to run in the main chat session instead of a subagent.
+   */
+  provider?: string;
+  /**
+   * Model id within the provider (e.g. "premium", "gpt-4o").
+   * Omit to run in the main chat session instead of a subagent.
+   */
+  model?: string;
   /** Built-in tool names the agent may use. See extensions/orchestrator/tools. */
   tools: string[];
   /** System prompt body — everything after the frontmatter. */
@@ -66,7 +72,7 @@ export function parseAgentDefinition(
     fields[key] = value;
   }
 
-  const required = ["name", "description", "provider", "model"];
+  const required = ["name", "description"];
   for (const k of required) {
     if (!fields[k]) {
       throw new Error(
@@ -78,8 +84,8 @@ export function parseAgentDefinition(
   return {
     name: fields.name,
     description: fields.description,
-    provider: fields.provider,
-    model: fields.model,
+    ...(fields.provider ? { provider: fields.provider } : {}),
+    ...(fields.model ? { model: fields.model } : {}),
     tools: (fields.tools ?? "")
       .split(",")
       .map((s) => s.trim())

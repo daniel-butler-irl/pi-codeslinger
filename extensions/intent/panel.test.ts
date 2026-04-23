@@ -15,7 +15,14 @@ function mockTheme() {
   return {
     fg: (_c: string, t: string) => t,
     bold: (t: string) => t,
+    italic: (t: string) => t,
+    underline: (t: string) => t,
+    strikethrough: (t: string) => t,
   } as any;
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\x1B\[[0-9;]*m/g, "");
 }
 
 function makeIntent(overrides: Partial<Intent> = {}): Intent {
@@ -86,6 +93,50 @@ describe("createIntentSidebar", () => {
     panel.update(storeWithIntent, null, "implementing");
     const lines = panel.render(30);
     assert.ok(lines.some((l) => l.includes("[IMPLEMENTING]")));
+  });
+
+  test("renders markdown in intent titles", () => {
+    const storeWithMarkdownTitle: IntentStore = {
+      activeIntentId: "id1",
+      intents: [makeIntent({ title: "**Critical** auth fix" })],
+    };
+    const panel = createIntentSidebar(
+      storeWithMarkdownTitle,
+      mockTui(),
+      mockTheme(),
+    );
+    const rendered = stripAnsi(panel.render(40).join("\n"));
+    assert.match(rendered, /Critical auth fix/);
+    assert.doesNotMatch(rendered, /\*\*Critical\*\*/);
+  });
+
+  test("renders markdown in description excerpts", () => {
+    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
+    panel.update(
+      storeWithIntent,
+      "**Critical** auth fix\n\n- update login flow",
+      "implementing",
+    );
+    const rendered = stripAnsi(panel.render(40).join("\n"));
+    assert.match(rendered, /Critical/);
+    assert.match(rendered, /update login flow/);
+    assert.doesNotMatch(rendered, /\*\*Critical\*\*/);
+  });
+
+  test("renders markdown in understanding section", () => {
+    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
+    panel.update(
+      storeWithIntent,
+      null,
+      "implementing",
+      "# Findings\n\n**Next step**\n- add coverage",
+    );
+    const rendered = stripAnsi(panel.render(40).join("\n"));
+    assert.match(rendered, /Findings/);
+    assert.match(rendered, /Next step/);
+    assert.match(rendered, /add coverage/);
+    assert.doesNotMatch(rendered, /# Findings/);
+    assert.doesNotMatch(rendered, /\*\*Next step\*\*/);
   });
 
   test("shows REVIEWING badge when phase is reviewing", () => {

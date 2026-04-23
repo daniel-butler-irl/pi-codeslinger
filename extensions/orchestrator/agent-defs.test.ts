@@ -75,18 +75,30 @@ body
     );
   });
 
-  test("throws on missing required field", () => {
+  test("allows missing provider and model (main-chat mode)", () => {
     const content = `---
 name: x
 description: X.
-provider: openai
+---
+
+body
+`;
+    const def = parseAgentDefinition("x.md", content);
+    assert.equal(def.name, "x");
+    assert.equal(def.provider, undefined);
+    assert.equal(def.model, undefined);
+  });
+
+  test("throws on missing required name", () => {
+    const content = `---
+description: X.
 ---
 
 body
 `;
     assert.throws(
       () => parseAgentDefinition("x.md", content),
-      /missing required field "model"/,
+      /missing required field "name"/,
     );
   });
 });

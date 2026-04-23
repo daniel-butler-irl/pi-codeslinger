@@ -1,6 +1,6 @@
 ---
 name: adversarial-review
-description: Use this skill when reviewing an implementer's work against a locked intent contract. Hunts actively for failure modes. "Pass" is the minority verdict — default is "rework" unless you have tried to find problems and could not.
+description: Use when reviewing an implementer's work against a locked intent contract to produce a pass or rework verdict.
 ---
 
 # Adversarial review
@@ -11,6 +11,35 @@ broken** before the user has to find it in production.
 
 Your default disposition is skepticism. "Pass" requires evidence, not
 vibes.
+
+## Session Understanding
+
+When you begin a review, use the `update_understanding` tool to record:
+
+1. **What's being reviewed**: Brief summary from the contract
+2. **Verification status**: Pass/fail from verification.json
+3. **Key areas to inspect**: Based on the contract's criteria
+4. **Findings so far**: Update as you discover issues
+
+This understanding appears in the Intent sidebar and persists. Update it
+as you work through your hunt procedure.
+
+Example:
+
+```
+Reviewing: JWT rotation middleware implementation
+
+Verification: PASSED (all 3 commands)
+
+Inspecting:
+- JWT rotation logic in src/auth/jwt.ts
+- Test coverage in rotation.test.ts
+- Error handling paths
+
+Findings:
+1. Hard-coded token in jwt.ts:45 (cardboard muffin)
+2. Missing test for expired token case
+```
 
 ## Read this before anything else
 
@@ -61,47 +90,25 @@ missing), that is cardboard muffin. Finding.
 
 ### Step 3: actively hunt the failure modes
 
-Do not skim. Use `grep` and `read` to check each pattern below. Report
-findings, not a clean bill of health.
+First, run the gate script. It discovers what validation tools the repo
+declares and runs them as hard gates — type checker, test suite, secrets
+scanner, linters. It exits non-zero if anything fails or a required tool
+is missing:
 
-#### Hunt: deleted or weakened tests
-
-```
-grep -rn "\.skip\|xtest\|xit\|todo(" path/to/changed/tests/
-git diff --stat   # (if available) — large test removals are suspicious
-```
-
-If a test file lost lines during this work, find out which tests, and
-whether they should still exist. Removed test = finding unless the log
-has a `decision` entry explicitly justifying it.
-
-#### Hunt: hard-coded returns
-
-```
-grep -rn "return true\|return false\|return \".*\"\|return {}" <changed files>
+```bash
+scripts/gate.sh
 ```
 
-A hard-coded return inside new logic is suspicious. A function that
-`return`s the same constant regardless of its arguments is always a
-finding.
+Then run the hunt script against the changed files for grep-based pattern
+checks the gate cannot automate:
 
-#### Hunt: swallowed errors
-
-```
-grep -rn "catch (\|catch(" <changed files>
+```bash
+scripts/hunt.sh --git
+# or: scripts/hunt.sh path/to/changed/files
 ```
 
-Empty catch blocks, catch blocks that only `console.error`, catch
-blocks that rethrow a generic error — all findings. The contract
-implicitly requires errors to behave correctly.
-
-#### Hunt: residue (litterbug)
-
-```
-grep -rn "TODO\|FIXME\|XXX\|console\.log\|debugger" <changed files>
-```
-
-Any of these are findings unless the log justifies them.
+Two hunts also require reading and judgment — the hunt script reminds you
+of both:
 
 #### Hunt: shape-only tests
 

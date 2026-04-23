@@ -26,13 +26,15 @@ import { join } from "path";
  * - defining: collaborative with the user; intent.md is writable
  * - implementing: locked; an implementer subagent is doing the work
  * - reviewing: locked; an adversarial reviewer subagent is checking the work
- * - done: terminal; verification passed and review found no issues
+ * - proposed-ready: reviewer passed; waiting for human sign-off before done
+ * - done: terminal; human signed off after review passed
  * - blocked-on-child: paused while a child (prerequisite) intent completes
  */
 export type IntentPhase =
   | "defining"
   | "implementing"
   | "reviewing"
+  | "proposed-ready"
   | "done"
   | "blocked-on-child";
 
@@ -90,6 +92,7 @@ function storePath(cwd: string): string {
  *
  * Layout under <cwd>/.pi/intents/<id>/:
  *   intent.md          — the contract (locked outside the defining phase)
+ *   understanding.md   — session's current understanding, next steps, questions
  *   log.md             — append-only journal (discoveries, decisions, findings)
  *   verification.json  — cached results of the last verification run
  */
@@ -110,8 +113,16 @@ export function intentLogPath(cwd: string, id: string): string {
   return join(intentDir(cwd, id), "log.md");
 }
 
+export function intentUnderstandingPath(cwd: string, id: string): string {
+  return join(intentDir(cwd, id), "understanding.md");
+}
+
 export function intentVerificationPath(cwd: string, id: string): string {
   return join(intentDir(cwd, id), "verification.json");
+}
+
+export function reviewResultPath(cwd: string, id: string): string {
+  return join(intentDir(cwd, id), "review-result.json");
 }
 
 /**
@@ -242,6 +253,25 @@ export function readLog(cwd: string, id: string): string {
   }
 }
 
+export function readUnderstanding(cwd: string, id: string): string {
+  try {
+    return readFileSync(intentUnderstandingPath(cwd, id), "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+export function writeUnderstanding(
+  cwd: string,
+  id: string,
+  content: string,
+): void {
+  mkdirSync(intentDir(cwd, id), { recursive: true });
+  const tmp = intentUnderstandingPath(cwd, id) + ".tmp";
+  writeFileSync(tmp, content, "utf-8");
+  renameSync(tmp, intentUnderstandingPath(cwd, id));
+}
+
 export interface VerificationResult {
   /** ISO timestamp of when verification ran. */
   ranAt: string;
@@ -275,6 +305,35 @@ export function readVerification(
   try {
     const raw = readFileSync(intentVerificationPath(cwd, id), "utf-8");
     return JSON.parse(raw) as VerificationResult;
+  } catch {
+    return null;
+  }
+}
+
+export interface ReviewResult {
+  /** The reviewer's verdict. */
+  verdict: "pass" | "rework";
+  /** Brief summary of the most important findings (2–3 sentences). */
+  summary: string;
+  /** ISO timestamp of when the review was reported. */
+  reviewedAt: string;
+}
+
+export function writeReviewResult(
+  cwd: string,
+  id: string,
+  result: ReviewResult,
+): void {
+  mkdirSync(intentDir(cwd, id), { recursive: true });
+  const tmp = reviewResultPath(cwd, id) + ".tmp";
+  writeFileSync(tmp, JSON.stringify(result, null, 2), "utf-8");
+  renameSync(tmp, reviewResultPath(cwd, id));
+}
+
+export function readReviewResult(cwd: string, id: string): ReviewResult | null {
+  try {
+    const raw = readFileSync(reviewResultPath(cwd, id), "utf-8");
+    return JSON.parse(raw) as ReviewResult;
   } catch {
     return null;
   }
@@ -387,8 +446,12 @@ export function deleteIntent(
 
 const LEGAL_TRANSITIONS: Record<IntentPhase, ReadonlySet<IntentPhase>> = {
   defining: new Set(["implementing", "blocked-on-child"]),
-  implementing: new Set(["reviewing", "blocked-on-child"]),
-  reviewing: new Set(["implementing", "done"]),
+  // "done" kept here so the overlay's "skip review" fast-path works without
+  // forcing the intent through proposed-ready.
+  implementing: new Set(["reviewing", "blocked-on-child", "done"]),
+  // Reviewer routes to proposed-ready (not done); only humans reach done.
+  reviewing: new Set(["implementing", "proposed-ready"]),
+  "proposed-ready": new Set(["done", "implementing"]),
   "blocked-on-child": new Set(["defining", "implementing"]),
   done: new Set(),
 };

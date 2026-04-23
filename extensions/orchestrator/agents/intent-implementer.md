@@ -1,8 +1,6 @@
 ---
 name: intent-implementer
-description: Implements code changes against a locked intent contract. Never modifies the contract. Appends discoveries to the intent log. Uses the implementing-against-intent skill.
-provider: openai
-model: gpt-4o
+description: Implements code changes against a locked intent contract. Never modifies the contract. Appends discoveries to the intent log. Uses the implementing-against-intent skill and terse skill.
 tools: read, grep, find, ls, bash, edit, write
 ---
 

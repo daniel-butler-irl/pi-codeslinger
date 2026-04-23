@@ -28,6 +28,7 @@ export type PendingSignal =
       kind: "review";
       intentId: string;
       verdict: "pass" | "rework";
+      summary: string;
       findings: string[];
       nextActions: string[];
       reportedAt: string;
@@ -60,6 +61,8 @@ export interface IntentFlight {
   agents: Partial<Record<AgentRole, DispatchedAgentHandle>>;
   /** A signal raised during the last agent turn, awaiting the driver. */
   pendingSignal: PendingSignal | null;
+  /** Wired by the driver during reviewer turns to push live status to the UI. */
+  onStatus?: (message: string) => void;
 }
 
 /**

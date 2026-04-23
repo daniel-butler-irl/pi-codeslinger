@@ -13,6 +13,8 @@
  * instructed (via their system prompt) to stop producing work after any
  * protocol call.
  */
+// TODO: Migrate to 'typebox' once TypeScript types are fully compatible
+// Currently using @sinclair/typebox with Pi 0.69.0's compatibility shims
 import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { AgentRole, IntentFlight } from "./state.ts";
@@ -71,6 +73,34 @@ export function makeProposeDoneTool(
 }
 
 /**
+ * `report_status` — the reviewer pushes a one-line live status update.
+ * Does NOT set pendingSignal; the reviewer session keeps running after
+ * calling this. The driver wires flight.onStatus to emit an event to the UI.
+ */
+export function makeReportStatusTool(flight: IntentFlight): ToolDefinition {
+  return {
+    name: "report_status",
+    label: "Report status",
+    description:
+      `Push a brief live status update while reviewing intent ${flight.intentId}. ` +
+      `Use short phrases ("Checking test coverage", "Reading contract", ` +
+      `"Inspecting changed files"). Do not use this to report findings — ` +
+      `use report_review for that. Call this freely as you work.`,
+    parameters: Type.Object({
+      message: Type.String({
+        description:
+          "One short phrase describing what you are currently doing.",
+      }),
+    }),
+    async execute(_toolCallId, rawParams) {
+      const params = rawParams as { message: string };
+      flight.onStatus?.(params.message);
+      return ack("Status noted.");
+    },
+  };
+}
+
+/**
  * `report_review` — the reviewer's structured verdict.
  */
 export function makeReportReviewTool(flight: IntentFlight): ToolDefinition {
@@ -85,6 +115,11 @@ export function makeReportReviewTool(flight: IntentFlight): ToolDefinition {
     parameters: Type.Object({
       verdict: Type.Union([Type.Literal("pass"), Type.Literal("rework")], {
         description: "Your verdict.",
+      }),
+      summary: Type.String({
+        description:
+          "2-3 sentence prose summary of what you found (or confirmed was " +
+          "clean). This appears in the sidebar so keep it concise and human-readable.",
       }),
       findings: Type.Array(Type.String(), {
         description:
@@ -101,6 +136,7 @@ export function makeReportReviewTool(flight: IntentFlight): ToolDefinition {
     async execute(_toolCallId, rawParams) {
       const params = rawParams as {
         verdict: "pass" | "rework";
+        summary: string;
         findings: string[];
         nextActions?: string[];
       };
@@ -114,6 +150,7 @@ export function makeReportReviewTool(flight: IntentFlight): ToolDefinition {
         kind: "review",
         intentId: flight.intentId,
         verdict: params.verdict,
+        summary: params.summary,
         findings: params.findings,
         nextActions: params.nextActions ?? [],
         reportedAt: new Date().toISOString(),
@@ -164,6 +201,227 @@ export function makeAskOrchestratorTool(
         "Question recorded. Stop work until the orchestrator responds in " +
           "your next instruction.",
       );
+    },
+  };
+}
+
+/**
+ * `read_intent` — read the current intent's contract file.
+ * Provides convenient access to the locked contract without needing
+ * to construct the path manually.
+ */
+export function makeReadIntentTool(
+  flight: IntentFlight,
+  cwd: string,
+): ToolDefinition {
+  return {
+    name: "read_intent",
+    label: "Read intent",
+    description:
+      `Read the contract for intent ${flight.intentId}. Returns the ` +
+      `full content of the intent.md file (Description, Success Criteria, ` +
+      `and Verification sections).`,
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _rawParams) {
+      // Import here to avoid circular dependency issues
+      const { loadIntentContent } = await import("../intent/store.ts");
+      const content = loadIntentContent(cwd, flight.intentId);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: content || "(Intent contract file is empty)",
+          },
+        ],
+        details: {},
+      };
+    },
+  };
+}
+
+/**
+ * `list_intents` — list all intents with their metadata.
+ * Useful for understanding the intent tree, finding related intents,
+ * or checking what work has been done.
+ */
+export function makeListIntentsTool(cwd: string): ToolDefinition {
+  return {
+    name: "list_intents",
+    label: "List intents",
+    description:
+      "List all intents in the project with their metadata (id, title, " +
+      "phase, parent relationship). Useful for understanding the intent " +
+      "tree structure, finding related work, or checking status.",
+    parameters: Type.Object({
+      filter: Type.Optional(
+        Type.Union(
+          [
+            Type.Literal("all"),
+            Type.Literal("active"),
+            Type.Literal("done"),
+            Type.Literal("children"),
+          ],
+          {
+            description:
+              'Filter: "all" (default), "active" (current intent only), ' +
+              '"done" (completed intents), "children" (children of current intent)',
+          },
+        ),
+      ),
+    }),
+    async execute(_toolCallId, rawParams) {
+      const params = rawParams as { filter?: string };
+      const { loadStore, getChildren } = await import("../intent/store.ts");
+      const store = loadStore(cwd);
+      const filter = params.filter ?? "all";
+
+      let intents = store.intents;
+      if (filter === "active" && store.activeIntentId) {
+        intents = intents.filter((i) => i.id === store.activeIntentId);
+      } else if (filter === "done") {
+        intents = intents.filter((i) => i.phase === "done");
+      } else if (filter === "children" && store.activeIntentId) {
+        intents = getChildren(store, store.activeIntentId);
+      }
+
+      if (intents.length === 0) {
+        return ack("No intents found matching the filter.");
+      }
+
+      const lines = intents.map((intent) => {
+        const active = intent.id === store.activeIntentId ? " [ACTIVE]" : "";
+        const parent = intent.parentId ? ` (child of ${intent.parentId})` : "";
+        return (
+          `- ${intent.title}${active}\n` +
+          `  ID: ${intent.id}\n` +
+          `  Phase: ${intent.phase}\n` +
+          `  Rework count: ${intent.reworkCount}${parent}`
+        );
+      });
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Found ${intents.length} intent(s):\n\n${lines.join("\n\n")}`,
+          },
+        ],
+        details: {},
+      };
+    },
+  };
+}
+
+/**
+ * `read_intent_log` — read the append-only log for an intent.
+ * The log contains discoveries, decisions, review findings, and other
+ * timestamped events from the intent's lifecycle.
+ */
+export function makeReadIntentLogTool(
+  flight: IntentFlight,
+  cwd: string,
+): ToolDefinition {
+  return {
+    name: "read_intent_log",
+    label: "Read intent log",
+    description:
+      `Read the append-only log for intent ${flight.intentId}. The log ` +
+      `contains discoveries, decisions, verification results, review ` +
+      `findings, and other timestamped events from the intent's lifecycle.`,
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _rawParams) {
+      const { readLog } = await import("../intent/store.ts");
+      const content = readLog(cwd, flight.intentId);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: content || "(Log is empty)",
+          },
+        ],
+        details: {},
+      };
+    },
+  };
+}
+
+/**
+ * `read_intent_understanding` — read the current understanding file.
+ * This contains the session's evolving understanding of the problem,
+ * key discoveries, next steps, and open questions.
+ */
+export function makeReadIntentUnderstandingTool(
+  flight: IntentFlight,
+  cwd: string,
+): ToolDefinition {
+  return {
+    name: "read_intent_understanding",
+    label: "Read intent understanding",
+    description:
+      `Read the understanding file for intent ${flight.intentId}. This ` +
+      `contains the session's current problem understanding, key ` +
+      `discoveries, next steps needed, and open questions.`,
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _rawParams) {
+      const { readUnderstanding } = await import("../intent/store.ts");
+      const content = readUnderstanding(cwd, flight.intentId);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: content || "(Understanding file is empty)",
+          },
+        ],
+        details: {},
+      };
+    },
+  };
+}
+
+/**
+ * `read_verification_results` — read the cached verification results.
+ * Shows which commands passed/failed in the last verification run.
+ */
+export function makeReadVerificationResultsTool(
+  flight: IntentFlight,
+  cwd: string,
+): ToolDefinition {
+  return {
+    name: "read_verification_results",
+    label: "Read verification results",
+    description:
+      `Read the cached verification results for intent ${flight.intentId}. ` +
+      `Shows which commands passed or failed in the most recent ` +
+      `verification run, with exit codes and output.`,
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _rawParams) {
+      const { readVerification } = await import("../intent/store.ts");
+      const result = readVerification(cwd, flight.intentId);
+      if (!result) {
+        return ack("No verification results available yet.");
+      }
+
+      const summary = `Verification ran at: ${result.ranAt}\nOverall: ${
+        result.passed ? "PASSED" : "FAILED"
+      }\n\n`;
+      const commands = result.commands
+        .map(
+          (cmd) =>
+            `Command: ${cmd.command}\n` +
+            `Status: ${cmd.passed ? "✓ PASS" : "✗ FAIL"} (exit ${cmd.exitCode})\n` +
+            (cmd.output ? `Output:\n${cmd.output}\n` : ""),
+        )
+        .join("\n");
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: summary + commands,
+          },
+        ],
+        details: {},
+      };
     },
   };
 }
@@ -227,21 +485,29 @@ export function makeSpawnChildIntentTool(
 export function protocolToolsForRole(
   flight: IntentFlight,
   role: AgentRole,
+  cwd: string,
 ): ToolDefinition[] {
+  // Tools available to all roles
+  const commonTools = [
+    makeReadIntentTool(flight, cwd),
+    makeListIntentsTool(cwd),
+    makeReadIntentLogTool(flight, cwd),
+    makeReadIntentUnderstandingTool(flight, cwd),
+    makeReadVerificationResultsTool(flight, cwd),
+    makeAskOrchestratorTool(flight, role),
+    makeSpawnChildIntentTool(flight, role),
+  ];
+
   switch (role) {
     case "reviewer":
       return [
+        ...commonTools,
+        makeReportStatusTool(flight),
         makeReportReviewTool(flight),
-        makeAskOrchestratorTool(flight, role),
-        makeSpawnChildIntentTool(flight, role),
       ];
     case "implementer":
     case "planner":
     case "researcher":
-      return [
-        makeProposeDoneTool(flight, role),
-        makeAskOrchestratorTool(flight, role),
-        makeSpawnChildIntentTool(flight, role),
-      ];
+      return [...commonTools, makeProposeDoneTool(flight, role)];
   }
 }

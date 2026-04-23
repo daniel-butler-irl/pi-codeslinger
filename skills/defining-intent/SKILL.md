@@ -1,6 +1,6 @@
 ---
 name: defining-intent
-description: Use this skill when a user wants to create or refine the Description, Success Criteria, or Verification section of an intent. Forces the intent to be specific and independently verifiable before it gets locked.
+description: Use when a user wants to create or refine an intent's Description, Success Criteria, or Verification section, or when an intent is vague, unmeasurable, or cannot be verified without consulting an AI.
 ---
 
 # Defining an intent
@@ -11,6 +11,35 @@ changed and what "done" looks like. A vague intent produces vague work.
 Your job during defining is to help the user write a contract that is
 **specific**, **outcome-oriented**, and **independently verifiable**. Not
 to write code yet. Not to start work.
+
+## Session Understanding
+
+As you work with the user to define the intent, use the `update_understanding`
+tool to capture:
+
+1. **Current problem**: What the user is trying to achieve
+2. **Clarifications needed**: Gaps in the description, criteria, or verification
+3. **Next steps**: What sections still need work
+4. **Decisions made**: Key choices that shaped the intent
+
+This understanding appears in the Intent sidebar and persists across
+sessions. Update it as you make progress refining the intent.
+
+Example:
+
+```
+Problem: User wants to add JWT auth but description is vague
+
+Clarifications needed:
+- Why JWT vs current session tokens?
+- What compliance requirement?
+- Which tests need to pass?
+
+Next steps:
+- Refine Description with specific compliance requirement
+- Add concrete success criteria for test names
+- Define verification commands
+```
 
 ## The three required sections
 
