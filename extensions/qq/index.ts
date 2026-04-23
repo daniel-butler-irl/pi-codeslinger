@@ -882,9 +882,13 @@ export function registerQqExtension(
 
   async function resetQqState(
     ctx?: ExtensionContext | ExtensionCommandContext,
+    notice?: string,
   ): Promise<void> {
     await disposeQqSession();
     transcriptState = createEmptyTranscriptState();
+    if (notice) {
+      appendTranscriptEntry(transcriptState, { type: "system", text: notice });
+    }
     overlayDraft = "";
     overlayStatus = QQ_READY_STATUS;
     syncOverlay(ctx);
@@ -1158,8 +1162,14 @@ export function registerQqExtension(
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    await resetQqState(ctx);
-    dismissOverlay();
+    const wasOpen = !!overlayRuntime?.handle;
+    await resetQqState(
+      ctx,
+      wasOpen ? "New session started — context cleared" : undefined,
+    );
+    if (!wasOpen) {
+      dismissOverlay();
+    }
   });
 
   pi.on("session_shutdown", async () => {
@@ -1190,9 +1200,10 @@ export function registerQqExtension(
   pi.registerCommand("qq:clear", {
     description: "Clear the quick-question chat and dispose its side session.",
     handler: async (_args, ctx) => {
-      await resetQqState(ctx);
-      dismissOverlay();
-      hideOverlay();
+      await resetQqState(ctx, "Session cleared — ask a new question");
+      if (overlayRuntime?.handle) {
+        focusOverlay();
+      }
       notify(ctx, "Cleared quick-question chat.", "info");
     },
   });

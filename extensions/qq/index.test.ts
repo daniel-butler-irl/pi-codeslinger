@@ -429,6 +429,25 @@ describe("qq extension", () => {
     assert.doesNotMatch(rendered, /\*\*bold\*\*/);
   });
 
+  test("qq transcript renders system entries as a notice", () => {
+    const lines = buildTranscriptLines(
+      [{ id: 1, type: "system", text: "Session cleared — ask a new question" }],
+      {
+        fg: (_name: string, text: string) => text,
+        bg: (_name: string, text: string) => text,
+        bold: (text: string) => text,
+        italic: (text: string) => text,
+        underline: (text: string) => text,
+        strikethrough: (text: string) => text,
+      } as any,
+      60,
+    );
+
+    const rendered = stripAnsi(lines.join("\n"));
+    assert.match(rendered, /Session cleared/);
+    assert.match(rendered, /◆/);
+  });
+
   test("/qq with a prompt creates a separate in-memory side session with repo tools plus intent tools", async () => {
     await withTempDir(async (cwd) => {
       const harness = createHarness();
@@ -606,7 +625,7 @@ describe("qq extension", () => {
     );
   });
 
-  test("/qq:clear aborts, disposes, clears transcript, and hides the overlay", async () => {
+  test("/qq:clear aborts, disposes, shows a system notice, and keeps the overlay open", async () => {
     const harness = createHarness();
 
     await harness.command("qq", "first question");
@@ -618,14 +637,14 @@ describe("qq extension", () => {
     await harness.command("qq:clear", "");
     await flushAsyncWork();
 
-    assert.equal(harness.overlayHandles.at(-1)?.isHidden(), true);
     assert.equal(session?.getAbortCalls(), 1);
     assert.equal(session?.getDisposeCalls(), 1);
 
-    await harness.shortcut("ctrl+q");
-    await flushAsyncWork();
-
-    const reopened = harness.latestOverlay();
-    assert.deepEqual(reopened.getTranscriptEntries(), []);
+    const overlay = harness.latestOverlay();
+    const entries = overlay.getTranscriptEntries();
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.type, "system");
+    assert.match(entries[0]?.text ?? "", /Session cleared/);
+    assert.equal(harness.overlayHandles.at(-1)?.isHidden(), false);
   });
 });

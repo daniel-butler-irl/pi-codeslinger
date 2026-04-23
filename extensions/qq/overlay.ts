@@ -26,7 +26,8 @@ export type QqTranscriptEntry =
       status: "running" | "success" | "error";
       content?: string;
       truncated?: boolean;
-    };
+    }
+  | { id: number; type: "system"; text: string };
 
 function buildBadge(
   theme: Theme,
@@ -136,6 +137,12 @@ export function buildTranscriptLines(
     if (lines.length > 0 && entry.type === "user") {
       pushBlankLine();
       lines.push(separator);
+    }
+
+    if (entry.type === "system") {
+      pushBlankLine();
+      lines.push(theme.fg("dim", `◆ ${entry.text}`));
+      continue;
     }
 
     if (entry.type === "user") {
