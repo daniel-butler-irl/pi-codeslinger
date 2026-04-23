@@ -58,6 +58,7 @@ function mockPi() {
         },
       },
       sendUserMessage: async (_msg: string) => {},
+      newSession: async () => ({}),
     } as any,
     getHandlers: (event: string) => handlers.get(event) ?? [],
   };

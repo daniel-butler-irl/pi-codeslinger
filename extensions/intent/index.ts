@@ -150,6 +150,23 @@ export default function (pi: ExtensionAPI) {
       const verdict =
         reviewResult.verdict === "pass" ? "PASSED" : "REWORK NEEDED";
       parts.push("", `## Review Result (${verdict})`, "", reviewResult.summary);
+      if (reviewResult.verdict === "rework" && reviewResult.findings?.length) {
+        parts.push(
+          "",
+          "**Findings to address:**",
+          ...reviewResult.findings.map((f) => `- ${f}`),
+        );
+      }
+      if (
+        reviewResult.verdict === "rework" &&
+        reviewResult.nextActions?.length
+      ) {
+        parts.push(
+          "",
+          "**Suggested next actions:**",
+          ...reviewResult.nextActions.map((a) => `- ${a}`),
+        );
+      }
     }
 
     const content = parts.join("\n");
@@ -254,8 +271,31 @@ export default function (pi: ExtensionAPI) {
       // Auto-inject intent context on session start
       injectIntentContext();
 
-      // Note: Implementer and reviewer are NOT auto-dispatched on session start.
-      // The user triggers them manually via the overlay (Ctrl+I) or by locking/reviewing.
+      // For agent-driven phases, show a visible "new session" indicator so
+      // the user can see the context has been cleared and a fresh run is starting.
+      // Then auto-dispatch so the agent picks up exactly where it left off.
+      if (active.phase === "implementing" || active.phase === "reviewing") {
+        const phaseLabel =
+          active.phase === "implementing"
+            ? `implementing${active.reworkCount > 0 ? ` (rework #${active.reworkCount})` : ""}`
+            : "reviewing";
+        pi.sendMessage(
+          {
+            customType: "session-start-notice",
+            content: `Fresh session — ${phaseLabel}: "${active.title}"`,
+            display: true,
+          },
+          { deliverAs: "nextTurn", triggerTurn: false },
+        );
+
+        setImmediate(() => {
+          pi.events.emit("intent:phase-changed", {
+            id: active.id,
+            from: active.phase,
+            to: active.phase,
+          });
+        });
+      }
     }
 
     ctx.ui.custom(

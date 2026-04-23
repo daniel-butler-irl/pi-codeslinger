@@ -26,8 +26,10 @@ import {
   intentLogPath,
   intentVerificationPath,
   writeReviewResult,
+  readReviewResult,
   type IntentStore,
   type Intent,
+  type IntentPhase,
 } from "../intent/store.ts";
 import { FlightTable, type AgentRole, type IntentFlight } from "./state.ts";
 import { dispatchAgent, type DispatchOptions } from "./dispatcher.ts";
@@ -172,15 +174,19 @@ export class OrchestratorDriver {
   // ── Phase-change handling ────────────────────────────────────────────
 
   private async onPhaseChanged(payload: PhaseChangedPayload): Promise<void> {
-    const { id: intentId, to } = payload;
+    const { id: intentId, to, from } = payload;
+    // from === to means session_start re-emitted the same phase to resume
+    // an in-progress intent. Use sendUserMessage (already in a session).
+    // from !== to is a real phase transition — start a clean session.
+    const isResume = from === to;
     const store = loadStore(this.cwd);
     const intent = store.intents.find((i) => i.id === intentId);
     if (!intent) return;
 
     if (to === "implementing") {
-      await this.runImplementerLoop(store, intent);
+      await this.runImplementerLoop(store, intent, from, isResume);
     } else if (to === "reviewing") {
-      await this.runReviewerLoop(store, intent);
+      await this.runReviewerLoop(store, intent, from, isResume);
     } else if (to === "done") {
       await this.flights.remove(intentId);
       await this.resumeParentIfBlocked(intent);
@@ -233,6 +239,8 @@ export class OrchestratorDriver {
   private async runImplementerLoop(
     store: IntentStore,
     intent: Intent,
+    from: IntentPhase,
+    isResume = false,
   ): Promise<void> {
     const flight = this.flights.getOrCreate(intent.id);
 
@@ -244,14 +252,23 @@ export class OrchestratorDriver {
       const impl = await this.ensureAgent(flight, "implementer");
       await impl.prompt(this.buildImplementerPrompt(intent, flight));
       await this.handleSignal(store, intent, flight);
-    } else {
-      // Main-chat path: inject the implementation task into the current session.
-      // The implementer calls propose_done (a Pi tool in index.ts) which
-      // emits "orchestrator:proposal-signal" and routes through onProposalSignal.
+    } else if (isResume || from === "reviewing") {
+      // Two cases share this path:
+      // 1. isResume=true: session_start re-dispatched after intent extension
+      //    called ctx.newSession(); we're already in a fresh session.
+      // 2. from="reviewing": rework after review — no new session is started
+      //    (newSession is only available on ExtensionCommandContext, not on
+      //    ExtensionAPI); implementing continues in the reviewing session with
+      //    rework findings injected via buildImplementerPrompt.
       await this.pi.sendUserMessage(
         this.buildImplementerPrompt(intent, flight),
+        { deliverAs: "followUp" },
       );
     }
+    // else: initial lock/transition from user command — intent extension's
+    // handleLock/handleTransition will call ctx.newSession(), which triggers
+    // session_start, which re-emits { from: implementing, to: implementing }
+    // and hits the isResume branch above. Nothing to do here.
   }
 
   private async onProposalSignal(
@@ -293,18 +310,37 @@ export class OrchestratorDriver {
   private buildImplementerPrompt(intent: Intent, flight: IntentFlight): string {
     const contractPath = intentContractPath(this.cwd, intent.id);
     const logPath = intentLogPath(this.cwd, intent.id);
-    const pendingReview = flight.pendingSignal;
-    const reworkBlock =
-      pendingReview &&
-      pendingReview.kind === "review" &&
-      pendingReview.verdict === "rework"
-        ? `\n\nReview findings from the adversarial reviewer (address each):\n` +
-          pendingReview.findings.map((f) => `- ${f}`).join("\n") +
-          (pendingReview.nextActions.length
-            ? `\n\nSuggested next actions:\n` +
-              pendingReview.nextActions.map((a) => `- ${a}`).join("\n")
-            : "")
-        : "";
+
+    // In-memory signal wins (subagent path or same-session rework loop).
+    // On a fresh session restart (signal is null), fall back to the persisted
+    // review result so rework findings survive the session boundary.
+    const pendingReview =
+      flight.pendingSignal?.kind === "review" ? flight.pendingSignal : null;
+    const diskReview = !pendingReview
+      ? readReviewResult(this.cwd, intent.id)
+      : null;
+
+    let reworkBlock = "";
+    if (pendingReview?.verdict === "rework") {
+      reworkBlock =
+        `\n\nReview findings from the adversarial reviewer (address each):\n` +
+        pendingReview.findings.map((f) => `- ${f}`).join("\n") +
+        (pendingReview.nextActions.length
+          ? `\n\nSuggested next actions:\n` +
+            pendingReview.nextActions.map((a) => `- ${a}`).join("\n")
+          : "");
+    } else if (diskReview?.verdict === "rework") {
+      reworkBlock =
+        `\n\nThis is a rework. The previous review found:\n${diskReview.summary}` +
+        (diskReview.findings?.length
+          ? `\n\nSpecific findings to address:\n` +
+            diskReview.findings.map((f) => `- ${f}`).join("\n")
+          : "") +
+        (diskReview.nextActions?.length
+          ? `\n\nSuggested next actions:\n` +
+            diskReview.nextActions.map((a) => `- ${a}`).join("\n")
+          : "");
+    }
 
     return [
       `You are the implementer for intent ${intent.id}.`,
@@ -328,6 +364,8 @@ export class OrchestratorDriver {
   private async runReviewerLoop(
     store: IntentStore,
     intent: Intent,
+    _from: IntentPhase,
+    isResume = false,
   ): Promise<void> {
     const flight = this.flights.getOrCreate(intent.id);
 
@@ -356,10 +394,12 @@ export class OrchestratorDriver {
       await reviewer.prompt(this.buildReviewerPrompt(intent));
       await this.handleSignal(store, intent, flight);
     } else {
-      // Main-chat path: inject the review task into the current session.
-      // The reviewer calls report_review (a Pi tool in index.ts) which
-      // emits "orchestrator:review-signal" and routes through onReviewSignal.
-      await this.pi.sendUserMessage(this.buildReviewerPrompt(intent));
+      // Main-chat path: reviewing always runs in the current session.
+      // newSession is only available on ExtensionCommandContext (user-initiated
+      // commands), not on ExtensionAPI, so the driver cannot start a new session.
+      await this.pi.sendUserMessage(this.buildReviewerPrompt(intent), {
+        deliverAs: isResume ? "followUp" : "followUp",
+      });
     }
   }
 
@@ -461,10 +501,13 @@ export class OrchestratorDriver {
         return;
       }
 
-      // Write the rework result so the sidebar shows what the reviewer found.
+      // Persist findings so they survive the session restart when the
+      // implementer gets a fresh session for rework.
       writeReviewResult(this.cwd, intent.id, {
         verdict: "rework",
         summary: signal.summary,
+        findings: signal.findings,
+        nextActions: signal.nextActions,
         reviewedAt: signal.reportedAt,
       });
 
@@ -605,8 +648,8 @@ export class OrchestratorDriver {
 
 interface PhaseChangedPayload {
   id: string;
-  from: string;
-  to: string;
+  from: IntentPhase;
+  to: IntentPhase;
 }
 
 interface ReviewSignalPayload {

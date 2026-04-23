@@ -317,6 +317,10 @@ export interface ReviewResult {
   summary: string;
   /** ISO timestamp of when the review was reported. */
   reviewedAt: string;
+  /** Specific issues found (rework only). Persisted so they survive session restarts. */
+  findings?: string[];
+  /** Suggested fixes for each finding (rework only). */
+  nextActions?: string[];
 }
 
 export function writeReviewResult(
