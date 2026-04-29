@@ -5,7 +5,12 @@
  * (test/dev convenience).
  */
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
+
+function safeRealpath(p: string): string {
+  try { return realpathSync(p); } catch { return p; }
+}
 
 export function mainRepoRoot(cwd: string): string {
   let porcelain: string;
@@ -16,7 +21,7 @@ export function mainRepoRoot(cwd: string): string {
       stdio: ["ignore", "pipe", "ignore"],
     });
   } catch {
-    return cwd; // not a git repo — fall back
+    return safeRealpath(cwd); // not a git repo — fall back
   }
 
   // Parse porcelain: blocks separated by blank lines, each starts with
@@ -30,10 +35,10 @@ export function mainRepoRoot(cwd: string): string {
       if (line.startsWith("worktree ")) path = line.slice(9).trim();
       else if (line.startsWith("branch ")) branch = line.slice(7).trim();
     }
-    if (path && branch === "refs/heads/main") return path;
+    if (path && branch === "refs/heads/main") return safeRealpath(path);
   }
   // No main worktree found (detached HEAD on main, etc.) — fall back.
-  return cwd;
+  return safeRealpath(cwd);
 }
 
 export function mainPiDir(cwd: string): string {

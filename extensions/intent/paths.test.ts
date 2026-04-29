@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { mainRepoRoot, mainPiDir, mainIntentsJsonPath } from "./paths.ts";
+import { mainRepoRoot, mainPiDir, mainIntentsJsonPath, mainIntentDir, mainIntentContractPath } from "./paths.ts";
 
 function initRepo(): { dir: string; cleanup: () => void } {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-paths-")));
@@ -41,11 +41,16 @@ test("mainRepoRoot returns main worktree path from a feature worktree", () => {
   }
 });
 
-test("mainPiDir / mainIntentsJsonPath compose correctly", () => {
+test("mainPiDir / mainIntentsJsonPath / mainIntentDir / mainIntentContractPath compose correctly", () => {
   const { dir, cleanup } = initRepo();
   try {
     assert.equal(mainPiDir(dir), join(dir, ".pi"));
     assert.equal(mainIntentsJsonPath(dir), join(dir, ".pi", "intents.json"));
+    assert.equal(mainIntentDir(dir, "abc-123"), join(dir, ".pi", "intents", "abc-123"));
+    assert.equal(
+      mainIntentContractPath(dir, "abc-123"),
+      join(dir, ".pi", "intents", "abc-123", "intent.md"),
+    );
   } finally {
     cleanup();
   }
