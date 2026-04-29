@@ -191,13 +191,25 @@ function migrateLegacyFileLayout(cwd: string, store: IntentStore): void {
   }
 }
 
+function ensureTrailingNewline(content: string): string {
+  return content.endsWith("\n") ? content : `${content}\n`;
+}
+
+function stripSingleTrailingNewline(content: string): string {
+  return content.endsWith("\n") ? content.slice(0, -1) : content;
+}
+
 /**
  * Save the intent store metadata atomically.
  */
 export function saveStore(cwd: string, store: IntentStore): void {
   mkdirSync(piDir(cwd), { recursive: true });
   const tmp = storePath(cwd) + ".tmp";
-  writeFileSync(tmp, JSON.stringify(store, null, 2), "utf-8");
+  writeFileSync(
+    tmp,
+    ensureTrailingNewline(JSON.stringify(store, null, 2)),
+    "utf-8",
+  );
   renameSync(tmp, storePath(cwd));
 }
 
@@ -255,7 +267,9 @@ export function readLog(cwd: string, id: string): string {
 
 export function readUnderstanding(cwd: string, id: string): string {
   try {
-    return readFileSync(intentUnderstandingPath(cwd, id), "utf-8");
+    return stripSingleTrailingNewline(
+      readFileSync(intentUnderstandingPath(cwd, id), "utf-8"),
+    );
   } catch {
     return "";
   }
@@ -268,7 +282,7 @@ export function writeUnderstanding(
 ): void {
   mkdirSync(intentDir(cwd, id), { recursive: true });
   const tmp = intentUnderstandingPath(cwd, id) + ".tmp";
-  writeFileSync(tmp, content, "utf-8");
+  writeFileSync(tmp, ensureTrailingNewline(content), "utf-8");
   renameSync(tmp, intentUnderstandingPath(cwd, id));
 }
 
@@ -294,7 +308,11 @@ export function writeVerification(
 ): void {
   mkdirSync(intentDir(cwd, id), { recursive: true });
   const tmp = intentVerificationPath(cwd, id) + ".tmp";
-  writeFileSync(tmp, JSON.stringify(result, null, 2), "utf-8");
+  writeFileSync(
+    tmp,
+    ensureTrailingNewline(JSON.stringify(result, null, 2)),
+    "utf-8",
+  );
   renameSync(tmp, intentVerificationPath(cwd, id));
 }
 
@@ -330,7 +348,11 @@ export function writeReviewResult(
 ): void {
   mkdirSync(intentDir(cwd, id), { recursive: true });
   const tmp = reviewResultPath(cwd, id) + ".tmp";
-  writeFileSync(tmp, JSON.stringify(result, null, 2), "utf-8");
+  writeFileSync(
+    tmp,
+    ensureTrailingNewline(JSON.stringify(result, null, 2)),
+    "utf-8",
+  );
   renameSync(tmp, reviewResultPath(cwd, id));
 }
 
@@ -349,6 +371,29 @@ export function readReviewResult(cwd: string, id: string): ReviewResult | null {
 export function getActiveIntent(store: IntentStore): Intent | undefined {
   if (!store.activeIntentId) return undefined;
   return store.intents.find((i) => i.id === store.activeIntentId);
+}
+
+export type IntentListFilter = "all" | "active" | "done" | "children";
+
+export function filterIntents(
+  store: IntentStore,
+  filter: IntentListFilter,
+): Intent[] {
+  switch (filter) {
+    case "active":
+      return store.activeIntentId
+        ? store.intents.filter((intent) => intent.id === store.activeIntentId)
+        : [];
+    case "done":
+      return store.intents.filter((intent) => intent.phase === "done");
+    case "children":
+      return store.activeIntentId
+        ? getChildren(store, store.activeIntentId)
+        : [];
+    case "all":
+    default:
+      return store.intents;
+  }
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   createIntent,
   deleteIntent,
   getActiveIntent,
+  filterIntents,
   loadIntentContent,
   saveIntentContent,
   intentContractPath,
@@ -634,16 +635,7 @@ export default function (pi: ExtensionAPI) {
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const filter = params.filter ?? "all";
-      const { getChildren } = await import("./store.js");
-
-      let intents = store.intents;
-      if (filter === "active" && store.activeIntentId) {
-        intents = intents.filter((i) => i.id === store.activeIntentId);
-      } else if (filter === "done") {
-        intents = intents.filter((i) => i.phase === "done");
-      } else if (filter === "children" && store.activeIntentId) {
-        intents = getChildren(store, store.activeIntentId);
-      }
+      const intents = filterIntents(store, filter);
 
       if (intents.length === 0) {
         return {

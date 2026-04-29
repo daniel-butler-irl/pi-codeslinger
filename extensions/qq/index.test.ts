@@ -9,6 +9,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
+import { createIntent, loadStore, saveStore } from "../intent/store.ts";
 import { registerQqExtension } from "./index.ts";
 import { buildTranscriptLines } from "./overlay.ts";
 
@@ -542,6 +543,76 @@ describe("qq extension", () => {
       );
       assert.equal(switched.isError, false);
       assert.match(switched.content[0].text, /Switched to intent:/);
+    });
+  });
+
+  test("qq list_intents active filter returns no intents when no active intent exists", async () => {
+    await withTempDir(async (cwd) => {
+      const harness = createHarness();
+      harness.baseCtx.cwd = cwd;
+
+      const store = loadStore(cwd);
+      createIntent(store, cwd, "first intent");
+      createIntent(store, cwd, "second intent");
+      store.activeIntentId = null;
+      saveStore(cwd, store);
+
+      await harness.command("qq", "open qq");
+      await flushAsyncWork();
+
+      const options = harness.createSessionCalls[0];
+      const listIntentsTool = options.customTools.find(
+        (tool: any) => tool.name === "list_intents",
+      );
+      assert.ok(listIntentsTool);
+
+      const listed = await listIntentsTool.execute(
+        "tool-4",
+        { filter: "active" },
+        undefined,
+        undefined,
+        harness.baseCtx,
+      );
+      assert.equal(listed.isError, false);
+      assert.equal(
+        listed.content[0].text,
+        "No intents found matching the filter.",
+      );
+    });
+  });
+
+  test("qq list_intents children filter returns no intents when no active intent exists", async () => {
+    await withTempDir(async (cwd) => {
+      const harness = createHarness();
+      harness.baseCtx.cwd = cwd;
+
+      const store = loadStore(cwd);
+      createIntent(store, cwd, "first intent");
+      createIntent(store, cwd, "second intent");
+      store.activeIntentId = null;
+      saveStore(cwd, store);
+
+      await harness.command("qq", "open qq");
+      await flushAsyncWork();
+
+      const options = harness.createSessionCalls[0];
+      const listIntentsTool = options.customTools.find(
+        (tool: any) => tool.name === "list_intents",
+      );
+      assert.ok(listIntentsTool);
+
+      const listed = await listIntentsTool.execute(
+        "tool-5",
+        { filter: "children" },
+        undefined,
+        undefined,
+        harness.baseCtx,
+      );
+      assert.equal(listed.isError, false);
+      assert.equal(
+        listed.content[0].text,
+        "No intents found matching the filter.",
+      );
     });
   });
 

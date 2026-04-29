@@ -1,20 +1,11 @@
 {
-  "activeIntentId": "5731f5dd-fdb4-4289-80bc-1ca01ede2a0f",
+  "activeIntentId": "31dd982c-ed0d-4a12-a1f7-19ac82acc1f3",
   "intents": [
     {
       "id": "4a3df6df-ab67-4652-be59-baebb620f1dd",
       "title": "Create intent system for our loadout",
       "createdAt": 1775123440576,
       "updatedAt": 1775123440576,
-      "parentId": null,
-      "phase": "defining",
-      "reworkCount": 0
-    },
-    {
-      "id": "2f011b6d-4cb9-4b00-9bd4-17a240acd589",
-      "title": "Secondary intent example",
-      "createdAt": 1775123474846,
-      "updatedAt": 1775123474846,
       "parentId": null,
       "phase": "defining",
       "reworkCount": 0
@@ -41,10 +32,10 @@
       "id": "31dd982c-ed0d-4a12-a1f7-19ac82acc1f3",
       "title": "Add programmatic tools for ai assistant to",
       "createdAt": 1776853641049,
-      "updatedAt": 1776853641049,
+      "updatedAt": 1777455779181,
       "parentId": null,
-      "phase": "defining",
-      "reworkCount": 0
+      "phase": "implementing",
+      "reworkCount": 4
     },
     {
       "id": "1ecdf543-8d81-471d-b329-d5f180c8f3db",
