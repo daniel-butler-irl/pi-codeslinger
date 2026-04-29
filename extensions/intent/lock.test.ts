@@ -62,3 +62,16 @@ test("forceUnlock removes a stale lock", async () => {
     cleanup();
   }
 });
+
+test("withExclusiveLock releases lock when callback throws", async () => {
+  const { file, cleanup } = fixture();
+  try {
+    await assert.rejects(
+      () => withExclusiveLock(file, async () => { throw new Error("boom"); }),
+      /boom/,
+    );
+    assert.equal(isLocked(file), false);
+  } finally {
+    cleanup();
+  }
+});
