@@ -3,7 +3,13 @@ import type {
   ExtensionContext,
   ExtensionCommandContext,
 } from "@mariozechner/pi-coding-agent";
-import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
+import {
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  mkdirSync,
+  unlinkSync,
+} from "fs";
 import { join, dirname } from "path";
 
 // The subset of GTFOState that is meaningful to persist across restarts.
@@ -49,7 +55,10 @@ const GTFO_SETUP_HANDOVER = "gtfo-setup-handover";
 
 // Parse verdict and reason from assessment model output.
 // Exported for unit testing.
-export function parseVerdict(text: string): { verdict: string; reason: string } {
+export function parseVerdict(text: string): {
+  verdict: string;
+  reason: string;
+} {
   const verdictMatch = text.match(/VERDICT:\s*(YES|NO|MAYBE)/i);
   const reasonMatch = text.match(/REASON:\s*(.+)/is);
   return {
@@ -73,7 +82,9 @@ function createGtfoState(): GTFOState {
 }
 
 // Extract plain-text transcript from session branch for use in prompts.
-function extractTranscript(ctx: ExtensionContext): Array<{ role: string; content: string }> {
+function extractTranscript(
+  ctx: ExtensionContext,
+): Array<{ role: string; content: string }> {
   return ctx.sessionManager
     .getBranch()
     .map((entry: any) => {
@@ -127,11 +138,15 @@ export default function (pi: ExtensionAPI, deps: GtfoDeps = {}) {
   }
 
   // Cache for the lazily-resolved createAgentSession function.
-  let cachedCreateAgentSession: typeof import("@mariozechner/pi-coding-agent").createAgentSession | null = null;
+  let cachedCreateAgentSession:
+    | typeof import("@mariozechner/pi-coding-agent").createAgentSession
+    | null = null;
 
   // Single helper so both runAssessment and generateHandover share the same
   // resolution path.
-  async function getCreateAgentSession(): Promise<typeof import("@mariozechner/pi-coding-agent").createAgentSession> {
+  async function getCreateAgentSession(): Promise<
+    typeof import("@mariozechner/pi-coding-agent").createAgentSession
+  > {
     if (deps.createAgentSession) return deps.createAgentSession;
     if (!cachedCreateAgentSession) {
       const mod = await import("@mariozechner/pi-coding-agent");
@@ -173,9 +188,12 @@ export default function (pi: ExtensionAPI, deps: GtfoDeps = {}) {
       const persisted = lastGtfoEntry.data as Partial<PersistedGTFOState>;
       // Merge only persisted fields; reset transients to initial values.
       state.disabled = persisted.disabled ?? state.disabled;
-      state.lastHandoverPath = persisted.lastHandoverPath ?? state.lastHandoverPath;
-      state.assessmentModel = persisted.assessmentModel ?? state.assessmentModel;
-      state.pendingHandoverReason = persisted.pendingHandoverReason ?? state.pendingHandoverReason;
+      state.lastHandoverPath =
+        persisted.lastHandoverPath ?? state.lastHandoverPath;
+      state.assessmentModel =
+        persisted.assessmentModel ?? state.assessmentModel;
+      state.pendingHandoverReason =
+        persisted.pendingHandoverReason ?? state.pendingHandoverReason;
       state.baseThreshold = persisted.baseThreshold ?? state.baseThreshold;
       // Transients always reset:
       state.assessmentInProgress = false;
@@ -351,7 +369,8 @@ export default function (pi: ExtensionAPI, deps: GtfoDeps = {}) {
 
   // ── Command to configure base threshold ───────────────────────────────
   pi.registerCommand("gtfo:threshold", {
-    description: "Get or set the base token-usage threshold (%) at which GTFO triggers",
+    description:
+      "Get or set the base token-usage threshold (%) at which GTFO triggers",
     handler: async (args, ctx) => {
       const state = stateFor(ctx);
       const trimmed = args.trim();
