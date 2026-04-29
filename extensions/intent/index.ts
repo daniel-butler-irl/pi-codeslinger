@@ -9,7 +9,8 @@ import type {
 import { Type } from "@sinclair/typebox";
 import { visibleWidth, type Component, type TUI } from "@mariozechner/pi-tui";
 import { resolve, normalize, join } from "path";
-import { rmSync } from "node:fs";
+import { rmSync, existsSync } from "node:fs";
+import { decideTransitionToImplementing } from "./transition-gate.js";
 import { validateIntentForLock } from "./validate.js";
 import {
   createWorktree,
@@ -1097,15 +1098,22 @@ export default function (pi: ExtensionAPI) {
   ): Promise<CreatedWorktree | null> {
     // Skip the gate if a worktree already exists (re-entry, rework after review).
     if (intent.worktreePath && intent.worktreeBranch) {
-      return { path: intent.worktreePath, branch: intent.worktreeBranch };
+      if (existsSync(intent.worktreePath)) {
+        return { path: intent.worktreePath, branch: intent.worktreeBranch };
+      }
+      // Worktree was deleted out-of-band — clear stale state and fall through to re-create.
+      intent.worktreePath = undefined;
+      intent.worktreeBranch = undefined;
     }
     const proposedPath = worktreePath(mainRepoRoot(ctx.cwd), intent.title, intent.id);
     const proposedBranch = branchName(intent.title, intent.id);
-    const proceed = await ctx.ui.confirm(
-      "Ready to start implementation?",
-      `This will create a worktree at ${proposedPath} on branch ${proposedBranch} and start the implementer.`,
-    );
-    if (!proceed) {
+    const decision = await decideTransitionToImplementing({
+      confirm: () => ctx.ui.confirm(
+        "Ready to start implementation?",
+        `This will create a worktree at ${proposedPath} on branch ${proposedBranch} and start the implementer.`,
+      ),
+    });
+    if (decision === "cancel") {
       ctx.ui.notify("Implementation not started.", "info");
       return null;
     }
@@ -1173,21 +1181,25 @@ export default function (pi: ExtensionAPI) {
     const from: IntentPhase = intent.phase;
     const isActiveIntent = readActiveIntent(ctx.cwd) === intent.id;
 
-    transitionPhase(store, intent.id, "implementing");
-    await persist(ctx.cwd);
-    pi.events.emit("intent:phase-changed", {
-      id: intent.id,
-      from,
-      to: "implementing",
-    });
-    ctx.ui.notify(`Worktree created: ${created.path}`, "info");
+    try {
+      transitionPhase(store, intent.id, "implementing");
+      await persist(ctx.cwd);
+      pi.events.emit("intent:phase-changed", {
+        id: intent.id,
+        from,
+        to: "implementing",
+      });
+      ctx.ui.notify(`Worktree created: ${created.path}`, "info");
 
-    if (isActiveIntent && "newSession" in ctx) {
-      // pi-coding-agent's newSession() does not accept a cwd option, so we
-      // change the process cwd before starting the fresh session. The new
-      // session_start handler will pick up ctx.cwd from the new process cwd.
-      process.chdir(created.path);
-      await ctx.newSession();
+      if (isActiveIntent && "newSession" in ctx) {
+        // pi-coding-agent's newSession() does not accept a cwd option, so we
+        // change the process cwd before starting the fresh session. The new
+        // session_start handler will pick up ctx.cwd from the new process cwd.
+        process.chdir(created.path);
+        await ctx.newSession();
+      }
+    } catch (err) {
+      ctx.ui.notify((err as Error).message, "warning");
     }
   }
 
