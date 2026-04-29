@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync, existsSync, realpathSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -98,6 +98,24 @@ test("removeWorktree force-removes dir + branch", () => {
     assert.equal(existsSync(path), false);
     const out = execFileSync("git", ["branch", "--list", branch], { cwd: dir, encoding: "utf-8" });
     assert.equal(out.trim(), "");
+  } finally {
+    delete process.env.PI_WORKTREE_BASE;
+    rmSync(base, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test("createWorktree writes local excludes for shared intent metadata", () => {
+  const { dir, cleanup } = initRepo();
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "pi-wtbase5-")));
+  process.env.PI_WORKTREE_BASE = base;
+  try {
+    const { path } = createWorktree(dir, "Excl", "abcdef04");
+    const gitDir = execFileSync("git", ["rev-parse", "--git-dir"], { cwd: path, encoding: "utf-8" }).trim();
+    const excludeFile = join(gitDir.startsWith("/") ? gitDir : join(path, gitDir), "info", "exclude");
+    const contents = readFileSync(excludeFile, "utf-8");
+    assert.match(contents, /\.pi\/intents\.json/);
+    assert.match(contents, /\.pi\/intents\/\*\/intent\.md/);
   } finally {
     delete process.env.PI_WORKTREE_BASE;
     rmSync(base, { recursive: true, force: true });

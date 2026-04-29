@@ -9,7 +9,7 @@
  * Worktrees are always branched off `main` HEAD.
  */
 import { execFileSync } from "node:child_process";
-import { rmSync, mkdirSync, existsSync } from "node:fs";
+import { rmSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { mainRepoRoot } from "./paths.ts";
@@ -56,6 +56,17 @@ export function createWorktree(repoRoot: string, title: string, id: string): Cre
     cwd: main,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const gitDirOut = execFileSync("git", ["rev-parse", "--git-dir"], {
+    cwd: path,
+    encoding: "utf-8",
+  }).trim();
+  const gitDirAbs = gitDirOut.startsWith("/") ? gitDirOut : join(path, gitDirOut);
+  const excludeDir = join(gitDirAbs, "info");
+  mkdirSync(excludeDir, { recursive: true });
+  writeFileSync(
+    join(excludeDir, "exclude"),
+    ["# Pi worktree: shared intent metadata lives on main only", ".pi/intents.json", ".pi/intents/*/intent.md", ""].join("\n"),
+  );
   return { path, branch };
 }
 
