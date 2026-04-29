@@ -596,6 +596,47 @@ describe("getActiveIntent", () => {
   });
 });
 
+describe("audit-trail writes go to feature worktree, not main repo", () => {
+  test("appendLogEntry writes to the feature worktree, not the main repo", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-store-audit-wt-"));
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: dir });
+      execFileSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+      execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+      writeFileSync(join(dir, "README"), "x");
+      execFileSync("git", ["add", "."], { cwd: dir });
+      execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+
+      // Create intent from the main repo (writes contract to main repo).
+      const store = loadStore(dir);
+      const intent = createIntent(store, dir, "audit trail worktree test");
+
+      const wtPath = join(dir, "..", "audit-wt-feat");
+      execFileSync("git", ["worktree", "add", "-b", "audit-feat", wtPath], { cwd: dir });
+      try {
+        // Call appendLogEntry from the feature worktree path.
+        appendLogEntry(wtPath, intent.id, { kind: "discovery", body: "test note" });
+
+        // Log file must exist in the feature worktree.
+        assert.ok(
+          existsSync(join(wtPath, ".pi", "intents", intent.id, "log.md")),
+          "log.md should exist in the feature worktree",
+        );
+        // Log file must NOT exist in the main repo.
+        assert.equal(
+          existsSync(join(dir, ".pi", "intents", intent.id, "log.md")),
+          false,
+          "log.md should NOT be written to the main repo",
+        );
+      } finally {
+        execFileSync("git", ["worktree", "remove", "--force", wtPath], { cwd: dir });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("loadStore reads main repo .pi/ from a feature worktree", () => {
   test("loadStore reads main repo .pi/ from a feature worktree", async () => {
     const { execFileSync } = await import("node:child_process");

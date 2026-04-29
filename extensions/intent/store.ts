@@ -122,6 +122,14 @@ export function intentContractPath(cwd: string, id: string): string {
 }
 
 /**
+ * Local (feature-worktree) directory for per-worktree audit-trail files.
+ * Always resolves relative to cwd, never to the main repo.
+ */
+function localIntentDir(cwd: string, id: string): string {
+  return join(cwd, ".pi", "intents", id);
+}
+
+/**
  * Audit-trail files live in the feature worktree's own .pi/intents/<id>/.
  * These are per-worktree and do NOT route through the main repo.
  */
@@ -259,7 +267,7 @@ export interface LogEntry {
 }
 
 export function appendLogEntry(cwd: string, id: string, entry: LogEntry): void {
-  mkdirSync(intentDir(cwd, id), { recursive: true });
+  mkdirSync(localIntentDir(cwd, id), { recursive: true });
   const stamp = new Date().toISOString();
   const block = `\n## [${stamp}] ${entry.kind}\n\n${entry.body.trimEnd()}\n`;
   appendFileSync(intentLogPath(cwd, id), block, "utf-8");
@@ -286,7 +294,7 @@ export function writeUnderstanding(
   id: string,
   content: string,
 ): void {
-  mkdirSync(intentDir(cwd, id), { recursive: true });
+  mkdirSync(localIntentDir(cwd, id), { recursive: true });
   const tmp = intentUnderstandingPath(cwd, id) + ".tmp";
   writeFileSync(tmp, content, "utf-8");
   renameSync(tmp, intentUnderstandingPath(cwd, id));
@@ -312,7 +320,7 @@ export function writeVerification(
   id: string,
   result: VerificationResult,
 ): void {
-  mkdirSync(intentDir(cwd, id), { recursive: true });
+  mkdirSync(localIntentDir(cwd, id), { recursive: true });
   const tmp = intentVerificationPath(cwd, id) + ".tmp";
   writeFileSync(tmp, JSON.stringify(result, null, 2), "utf-8");
   renameSync(tmp, intentVerificationPath(cwd, id));
@@ -348,7 +356,7 @@ export function writeReviewResult(
   id: string,
   result: ReviewResult,
 ): void {
-  mkdirSync(intentDir(cwd, id), { recursive: true });
+  mkdirSync(localIntentDir(cwd, id), { recursive: true });
   const tmp = reviewResultPath(cwd, id) + ".tmp";
   writeFileSync(tmp, JSON.stringify(result, null, 2), "utf-8");
   renameSync(tmp, reviewResultPath(cwd, id));
@@ -428,8 +436,9 @@ export function createIntent(
 }
 
 /**
- * Delete an intent by id — removes metadata and the .md file.
- * Falls back to the most recent remaining intent as active, or null.
+ * Delete an intent by id — removes its directory tree and metadata entry.
+ * Caller is responsible for clearing per-worktree active state if the
+ * deleted intent was active.
  * Does NOT call saveStore() — caller must do that.
  */
 export function deleteIntent(
