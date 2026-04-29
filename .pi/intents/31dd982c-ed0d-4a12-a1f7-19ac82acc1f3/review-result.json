@@ -1,0 +1,12 @@
+{
+  "verdict": "rework",
+  "summary": "Found 1 remaining blocker. The on-disk code changes for newline-safe persistence and added tests look reasonable, but the latest proposal still comes with a failing `verification.json`, so the contract is not yet satisfied in reviewable evidence.",
+  "findings": [
+    "`.pi/intents/31dd982c-ed0d-4a12-a1f7-19ac82acc1f3/verification.json` is still `passed: false` for the latest proposal (`ranAt: 2026-04-29T09:40:32.541Z`). The failing command is `pre-commit run --all-files`, and its output shows `end-of-file-fixer` had to fix `.pi/intents.json` again. Success criterion 6 requires the project quality gates to pass with no failures, so this proposal cannot pass review while the recorded verification artifact for it is still failing."
+  ],
+  "nextActions": [
+    "Restart or otherwise refresh the active extension/orchestrator runtime so its in-memory `saveStore(...)` path uses the updated newline-safe code from `extensions/intent/store.ts` before triggering another proposal/review transition.",
+    "After that refreshed runtime performs a real intent-state mutation, rerun the full contract verification and make sure `.pi/intents/31dd982c-ed0d-4a12-a1f7-19ac82acc1f3/verification.json` ends in `passed: true` for the actual post-transition tree before proposing done again."
+  ],
+  "reviewedAt": "2026-04-29T09:42:59.180Z"
+}

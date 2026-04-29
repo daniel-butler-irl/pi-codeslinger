@@ -21,8 +21,8 @@ import { validateIntentForLock } from "../intent/validate.ts";
 import {
   createIntent,
   deleteIntent,
+  filterIntents,
   getActiveIntent,
-  getChildren,
   loadIntentContent,
   loadStore,
   readLog,
@@ -487,17 +487,7 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
         const store = loadStore(cwd);
         const activeIntentId = readActiveIntent(cwd);
         const filter = params.filter ?? "all";
-        let intents = store.intents;
-
-        if (filter === "active" && activeIntentId) {
-          intents = intents.filter(
-            (intent) => intent.id === activeIntentId,
-          );
-        } else if (filter === "done") {
-          intents = intents.filter((intent) => intent.phase === "done");
-        } else if (filter === "children" && activeIntentId) {
-          intents = getChildren(store, activeIntentId);
-        }
+        const intents = filterIntents(store, filter, cwd);
 
         if (intents.length === 0) {
           return {

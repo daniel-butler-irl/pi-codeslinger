@@ -1,5 +1,8 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   makeProposeDoneTool,
   makeReportReviewTool,
@@ -7,12 +10,20 @@ import {
   makeSpawnChildIntentTool,
   protocolToolsForRole,
 } from "./protocol-tools.ts";
+import { createIntent, loadStore, saveStore } from "../intent/store.ts";
 import { newFlight } from "./state.ts";
 
 // Minimal ctx / signal stand-ins for the tool execute signature.
 const noCtx: any = {};
 const noSignal: any = { aborted: false, addEventListener: () => {} };
 const noOp = () => {};
+
+function withTempDir(fn: (cwd: string) => Promise<void> | void) {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-protocol-tools-test-"));
+  return Promise.resolve()
+    .then(() => fn(cwd))
+    .finally(() => rmSync(cwd, { recursive: true, force: true }));
+}
 
 describe("propose_done tool", () => {
   test("records a proposal signal onto the flight", async () => {
@@ -162,6 +173,66 @@ describe("spawn_child_intent tool", () => {
     } else {
       assert.fail("expected spawn-child signal");
     }
+  });
+});
+
+describe("list_intents tool", () => {
+  test("active filter returns no intents when no active intent exists", async () => {
+    await withTempDir(async (cwd) => {
+      // No git repo in cwd, so readActiveIntent returns null — no active intent.
+      const store = loadStore(cwd);
+      createIntent(store, cwd, "first intent");
+      createIntent(store, cwd, "second intent");
+
+      const tool = protocolToolsForRole(
+        newFlight("intent-1"),
+        "implementer",
+        cwd,
+      ).find((entry) => entry.name === "list_intents");
+      assert.ok(tool);
+
+      const result = await tool.execute(
+        "call-1",
+        { filter: "active" },
+        noSignal,
+        noOp,
+        noCtx,
+      );
+
+      assert.equal(
+        (result.content[0] as any).text,
+        "No intents found matching the filter.",
+      );
+    });
+  });
+
+  test("children filter returns no intents when no active intent exists", async () => {
+    await withTempDir(async (cwd) => {
+      // No git repo in cwd, so readActiveIntent returns null — no active intent.
+      const store = loadStore(cwd);
+      createIntent(store, cwd, "first intent");
+      createIntent(store, cwd, "second intent");
+
+      const tool = protocolToolsForRole(
+        newFlight("intent-1"),
+        "implementer",
+        cwd,
+      ).find((entry) => entry.name === "list_intents");
+      assert.ok(tool);
+
+      const result = await tool.execute(
+        "call-2",
+        { filter: "children" },
+        noSignal,
+        noOp,
+        noCtx,
+      );
+
+      assert.equal(
+        (result.content[0] as any).text,
+        "No intents found matching the filter.",
+      );
+    });
   });
 });
 

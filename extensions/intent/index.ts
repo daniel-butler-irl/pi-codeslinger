@@ -28,6 +28,7 @@ import {
   createIntent,
   deleteIntent,
   getActiveIntent,
+  filterIntents,
   loadIntentContent,
   saveIntentContent,
   intentContractPath,
@@ -645,17 +646,8 @@ export default function (pi: ExtensionAPI) {
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const filter = params.filter ?? "all";
-      const { getChildren } = await import("./store.js");
-      const activeIntentId = readActiveIntent(cwdRef);
-
-      let intents = store.intents;
-      if (filter === "active" && activeIntentId) {
-        intents = intents.filter((i) => i.id === activeIntentId);
-      } else if (filter === "done") {
-        intents = intents.filter((i) => i.phase === "done");
-      } else if (filter === "children" && activeIntentId) {
-        intents = getChildren(store, activeIntentId);
-      }
+      const intents = filterIntents(store, filter, cwdRef);
+      const currentActiveId = readActiveIntent(cwdRef);
 
       if (intents.length === 0) {
         return {
@@ -671,7 +663,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       const lines = intents.map((intent) => {
-        const active = intent.id === activeIntentId ? " [ACTIVE]" : "";
+        const active = intent.id === currentActiveId ? " [ACTIVE]" : "";
         const parent = intent.parentId ? ` (child of ${intent.parentId})` : "";
         return (
           `- ${intent.title}${active}\n` +

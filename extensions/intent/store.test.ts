@@ -33,6 +33,7 @@ import {
   intentLogPath,
   intentUnderstandingPath,
   intentVerificationPath,
+  reviewResultPath,
   getChildren,
   getParent,
   getRoot,
@@ -45,6 +46,8 @@ import {
   writeUnderstanding,
   writeVerification,
   readVerification,
+  writeReviewResult,
+  readReviewResult,
   type Intent,
   type IntentPhase,
   type IntentStore,
@@ -132,6 +135,23 @@ describe("saveStore / loadStore round-trip", () => {
       await saveStore(cwd, original);
       const loaded = loadStore(cwd);
       assert.deepEqual(loaded, original);
+    });
+  });
+
+  test("writes intents.json with a trailing newline", async () => {
+    await withTempDir(async (cwd) => {
+      const intent: Intent = {
+        id: "abc",
+        title: "Test",
+        createdAt: 1,
+        updatedAt: 2,
+        parentId: null,
+        phase: "implementing",
+        reworkCount: 3,
+      };
+      await saveStore(cwd, { intents: [intent] });
+      const raw = readFileSync(join(cwd, ".pi", "intents.json"), "utf-8");
+      assert.ok(raw.endsWith("\n"));
     });
   });
 });
@@ -530,6 +550,36 @@ describe("log and verification helpers", () => {
     });
   });
 
+  test("writeVerification writes json with a trailing newline", async () => {
+    await withTempDir((cwd) => {
+      const store = loadStore(cwd);
+      const intent = createIntent(store, cwd, "work");
+      writeVerification(cwd, intent.id, {
+        ranAt: "2026-04-21T12:00:00.000Z",
+        passed: true,
+        commands: [],
+      });
+      const raw = readFileSync(intentVerificationPath(cwd, intent.id), "utf-8");
+      assert.ok(raw.endsWith("\n"));
+    });
+  });
+
+  test("writeReviewResult writes json with a trailing newline", async () => {
+    await withTempDir((cwd) => {
+      const store = loadStore(cwd);
+      const intent = createIntent(store, cwd, "work");
+      const result = {
+        verdict: "pass" as const,
+        summary: "Looks good.",
+        reviewedAt: "2026-04-21T12:00:00.000Z",
+      };
+      writeReviewResult(cwd, intent.id, result);
+      const raw = readFileSync(reviewResultPath(cwd, intent.id), "utf-8");
+      assert.ok(raw.endsWith("\n"));
+      assert.deepEqual(readReviewResult(cwd, intent.id), result);
+    });
+  });
+
   test("readVerification returns null when no file exists", async () => {
     await withTempDir((cwd) => {
       assert.equal(readVerification(cwd, "nonexistent"), null);
@@ -564,6 +614,20 @@ Next steps:
       writeUnderstanding(cwd, intent.id, understanding);
       assert.ok(existsSync(intentUnderstandingPath(cwd, intent.id)));
       assert.equal(readUnderstanding(cwd, intent.id), understanding);
+    });
+  });
+
+  test("writeUnderstanding writes markdown with a trailing newline", async () => {
+    await withTempDir((cwd) => {
+      const store = loadStore(cwd);
+      const intent = createIntent(store, cwd, "work");
+      writeUnderstanding(cwd, intent.id, "Problem: Add JWT auth");
+      const raw = readFileSync(
+        intentUnderstandingPath(cwd, intent.id),
+        "utf-8",
+      );
+      assert.ok(raw.endsWith("\n"));
+      assert.equal(readUnderstanding(cwd, intent.id), "Problem: Add JWT auth");
     });
   });
 

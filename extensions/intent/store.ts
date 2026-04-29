@@ -217,6 +217,14 @@ function migrateLegacyFileLayout(cwd: string, store: IntentStore): void {
   }
 }
 
+function ensureTrailingNewline(content: string): string {
+  return content.endsWith("\n") ? content : `${content}\n`;
+}
+
+function stripSingleTrailingNewline(content: string): string {
+  return content.endsWith("\n") ? content.slice(0, -1) : content;
+}
+
 /**
  * Save the intent store metadata atomically, with an exclusive lock.
  * Creates the file if it doesn't exist (proper-lockfile requires the
@@ -228,7 +236,7 @@ export async function saveStore(cwd: string, store: IntentStore): Promise<void> 
   if (!existsSync(file)) writeFileSync(file, JSON.stringify({ intents: [] }, null, 2));
   await withExclusiveLock(file, async () => {
     const tmp = file + ".tmp";
-    writeFileSync(tmp, JSON.stringify(store, null, 2), "utf-8");
+    writeFileSync(tmp, ensureTrailingNewline(JSON.stringify(store, null, 2)), "utf-8");
     renameSync(tmp, file);
   });
 }
@@ -287,7 +295,9 @@ export function readLog(cwd: string, id: string): string {
 
 export function readUnderstanding(cwd: string, id: string): string {
   try {
-    return readFileSync(intentUnderstandingPath(cwd, id), "utf-8");
+    return stripSingleTrailingNewline(
+      readFileSync(intentUnderstandingPath(cwd, id), "utf-8"),
+    );
   } catch {
     return "";
   }
@@ -300,7 +310,7 @@ export function writeUnderstanding(
 ): void {
   mkdirSync(localIntentDir(cwd, id), { recursive: true });
   const tmp = intentUnderstandingPath(cwd, id) + ".tmp";
-  writeFileSync(tmp, content, "utf-8");
+  writeFileSync(tmp, ensureTrailingNewline(content), "utf-8");
   renameSync(tmp, intentUnderstandingPath(cwd, id));
 }
 
@@ -326,7 +336,11 @@ export function writeVerification(
 ): void {
   mkdirSync(localIntentDir(cwd, id), { recursive: true });
   const tmp = intentVerificationPath(cwd, id) + ".tmp";
-  writeFileSync(tmp, JSON.stringify(result, null, 2), "utf-8");
+  writeFileSync(
+    tmp,
+    ensureTrailingNewline(JSON.stringify(result, null, 2)),
+    "utf-8",
+  );
   renameSync(tmp, intentVerificationPath(cwd, id));
 }
 
@@ -362,7 +376,11 @@ export function writeReviewResult(
 ): void {
   mkdirSync(localIntentDir(cwd, id), { recursive: true });
   const tmp = reviewResultPath(cwd, id) + ".tmp";
-  writeFileSync(tmp, JSON.stringify(result, null, 2), "utf-8");
+  writeFileSync(
+    tmp,
+    ensureTrailingNewline(JSON.stringify(result, null, 2)),
+    "utf-8",
+  );
   renameSync(tmp, reviewResultPath(cwd, id));
 }
 
@@ -383,6 +401,31 @@ export function getActiveIntent(store: IntentStore, cwd: string): Intent | undef
   const id = readActiveIntent(cwd);
   if (!id) return undefined;
   return store.intents.find((i) => i.id === id);
+}
+
+export type IntentListFilter = "all" | "active" | "done" | "children";
+
+export function filterIntents(
+  store: IntentStore,
+  filter: IntentListFilter,
+  cwd?: string,
+): Intent[] {
+  const activeIntentId = cwd ? readActiveIntent(cwd) : undefined;
+  switch (filter) {
+    case "active":
+      return activeIntentId
+        ? store.intents.filter((intent) => intent.id === activeIntentId)
+        : [];
+    case "done":
+      return store.intents.filter((intent) => intent.phase === "done");
+    case "children":
+      return activeIntentId
+        ? getChildren(store, activeIntentId)
+        : [];
+    case "all":
+    default:
+      return store.intents;
+  }
 }
 
 /**

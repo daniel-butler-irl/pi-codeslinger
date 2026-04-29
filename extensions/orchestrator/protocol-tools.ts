@@ -270,21 +270,15 @@ export function makeListIntentsTool(cwd: string): ToolDefinition {
       ),
     }),
     async execute(_toolCallId, rawParams) {
-      const params = rawParams as { filter?: string };
-      const { loadStore, getChildren } = await import("../intent/store.ts");
+      const params = rawParams as {
+        filter?: "all" | "active" | "done" | "children";
+      };
+      const { loadStore, filterIntents } = await import("../intent/store.ts");
       const { readActiveIntent } = await import("../intent/active-local.ts");
       const store = loadStore(cwd);
       const activeIntentId = readActiveIntent(cwd);
       const filter = params.filter ?? "all";
-
-      let intents = store.intents;
-      if (filter === "active" && activeIntentId) {
-        intents = intents.filter((i) => i.id === activeIntentId);
-      } else if (filter === "done") {
-        intents = intents.filter((i) => i.phase === "done");
-      } else if (filter === "children" && activeIntentId) {
-        intents = getChildren(store, activeIntentId);
-      }
+      const intents = filterIntents(store, filter, cwd);
 
       if (intents.length === 0) {
         return ack("No intents found matching the filter.");
