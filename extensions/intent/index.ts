@@ -1112,8 +1112,18 @@ export default function (pi: ExtensionAPI) {
       intent.worktreePath = undefined;
       intent.worktreeBranch = undefined;
     }
+
     const proposedPath = worktreePath(mainRepoRoot(ctx.cwd), intent.title, intent.id);
     const proposedBranch = branchName(intent.title, intent.id);
+
+    // Recovery: if a worktree was previously created but persist failed
+    // (so we have no record), adopt it without re-prompting.
+    if (existsSync(proposedPath)) {
+      intent.worktreePath = proposedPath;
+      intent.worktreeBranch = proposedBranch;
+      return { path: proposedPath, branch: proposedBranch };
+    }
+
     const decision = await decideTransitionToImplementing({
       confirm: () => ctx.ui.confirm(
         "Ready to start implementation?",
@@ -1353,13 +1363,20 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify((err as Error).message, "warning");
       return;
     }
-    // Clean up local audit-trail dir in the feature worktree.
+    // Clean local audit-trail dir under ctx.cwd.
     rmSync(join(ctx.cwd, ".pi", "intents", intent.id), {
       recursive: true,
       force: true,
     });
-    // Clean up worktree if the intent has one.
-    if (intent.worktreePath && intent.worktreeBranch) {
+    // If the intent has a worktree at a different path, clean that audit dir too.
+    if (intent.worktreePath && intent.worktreePath !== ctx.cwd) {
+      rmSync(join(intent.worktreePath, ".pi", "intents", intent.id), {
+        recursive: true,
+        force: true,
+      });
+    }
+    // Then if the worktree exists (i.e., wasn't already deleted via done-flow), remove it.
+    if (intent.worktreePath && intent.worktreeBranch && existsSync(intent.worktreePath)) {
       removeWorktree(ctx.cwd, intent.worktreePath, intent.worktreeBranch);
     }
     // Clear active state if this was the active intent.

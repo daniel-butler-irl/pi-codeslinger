@@ -13,6 +13,7 @@
  * Divergence guards live here: rework cap, question loop detection,
  * depth cap when child intents are spawned (once we add prereq cascade).
  */
+import { existsSync } from "node:fs";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import {
@@ -105,6 +106,18 @@ export class OrchestratorDriver {
     this.config = config;
     this.binding = binding;
     this.dispatch = dispatch ?? dispatchAgent;
+  }
+
+  /**
+   * Returns the cwd to use for audit-trail writes for a specific intent.
+   * If the intent has an existing feature worktree, audit files must land
+   * there — not in the main repo where the driver session may have started.
+   */
+  private intentCwd(intent: Intent): string {
+    if (intent.worktreePath && existsSync(intent.worktreePath)) {
+      return intent.worktreePath;
+    }
+    return this.cwd;
   }
 
   /**
@@ -207,7 +220,7 @@ export class OrchestratorDriver {
     if (!parent) return;
     if (parent.phase !== "blocked-on-child") return;
 
-    appendLogEntry(this.cwd, parent.id, {
+    appendLogEntry(this.intentCwd(parent), parent.id, {
       kind: "child-done",
       body: `Child intent "${child.title}" (${child.id}) reached done. Resuming implementation.`,
     });
@@ -318,7 +331,7 @@ export class OrchestratorDriver {
     const pendingReview =
       flight.pendingSignal?.kind === "review" ? flight.pendingSignal : null;
     const diskReview = !pendingReview
-      ? readReviewResult(this.cwd, intent.id)
+      ? readReviewResult(this.intentCwd(intent), intent.id)
       : null;
 
     let reworkBlock = "";
@@ -378,8 +391,8 @@ export class OrchestratorDriver {
       });
     };
 
-    const verif = runVerification(this.cwd, intent.id);
-    appendLogEntry(this.cwd, intent.id, {
+    const verif = runVerification(this.intentCwd(intent), intent.id);
+    appendLogEntry(this.intentCwd(intent), intent.id, {
       kind: "verification",
       body: verif.passed
         ? "All verification commands passed."
@@ -460,7 +473,7 @@ export class OrchestratorDriver {
 
     if (signal.kind === "proposal") {
       // Implementer claims done → move to reviewing.
-      appendLogEntry(this.cwd, intent.id, {
+      appendLogEntry(this.intentCwd(intent), intent.id, {
         kind: "proposal",
         body:
           `${signal.agentRole}: ${signal.summary}` +
@@ -480,14 +493,14 @@ export class OrchestratorDriver {
     }
 
     if (signal.kind === "review") {
-      appendLogEntry(this.cwd, intent.id, {
+      appendLogEntry(this.intentCwd(intent), intent.id, {
         kind: "review",
         body:
           `verdict=${signal.verdict}\n\n` +
           signal.findings.map((f) => `- ${f}`).join("\n"),
       });
       if (signal.verdict === "pass") {
-        writeReviewResult(this.cwd, intent.id, {
+        writeReviewResult(this.intentCwd(intent), intent.id, {
           verdict: "pass",
           summary: signal.summary,
           reviewedAt: signal.reportedAt,
@@ -504,7 +517,7 @@ export class OrchestratorDriver {
 
       // Persist findings so they survive the session restart when the
       // implementer gets a fresh session for rework.
-      writeReviewResult(this.cwd, intent.id, {
+      writeReviewResult(this.intentCwd(intent), intent.id, {
         verdict: "rework",
         summary: signal.summary,
         findings: signal.findings,
@@ -514,7 +527,7 @@ export class OrchestratorDriver {
 
       // Rework: cap check, then send back to implementer.
       if (intent.reworkCount >= this.config.maxReworkPerIntent) {
-        appendLogEntry(this.cwd, intent.id, {
+        appendLogEntry(this.intentCwd(intent), intent.id, {
           kind: "escalation",
           body:
             `Rework cap (${this.config.maxReworkPerIntent}) reached. ` +
@@ -547,7 +560,7 @@ export class OrchestratorDriver {
     if (signal.kind === "question") {
       // For now, questions bubble to the log and pause the flight. Wiring
       // them through the ask extension is a later refinement.
-      appendLogEntry(this.cwd, intent.id, {
+      appendLogEntry(this.intentCwd(intent), intent.id, {
         kind: "question",
         body:
           `From ${signal.agentRole}: ${signal.question}` +
@@ -559,7 +572,7 @@ export class OrchestratorDriver {
     if (signal.kind === "spawn-child") {
       const depth = this.depthOf(store, intent.id);
       if (depth >= this.config.maxChildIntentDepth) {
-        appendLogEntry(this.cwd, intent.id, {
+        appendLogEntry(this.intentCwd(intent), intent.id, {
           kind: "escalation",
           body:
             `Child intent requested but depth cap (${this.config.maxChildIntentDepth}) ` +
@@ -570,7 +583,7 @@ export class OrchestratorDriver {
       }
 
       // Pause this intent's current flight and create the child.
-      appendLogEntry(this.cwd, intent.id, {
+      appendLogEntry(this.intentCwd(intent), intent.id, {
         kind: "spawn-child",
         body:
           `Pausing for prerequisite.\n\n` +
