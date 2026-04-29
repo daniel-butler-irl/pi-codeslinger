@@ -1,7 +1,12 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createIntentSidebar } from "./panel.ts";
 import type { Intent, IntentStore } from "./store.ts";
+import { writeActiveIntent } from "./active-local.ts";
 
 function mockTui(rows = 24, columns = 80) {
   return {
@@ -38,9 +43,24 @@ function makeIntent(overrides: Partial<Intent> = {}): Intent {
   };
 }
 
-const emptyStore: IntentStore = { activeIntentId: null, intents: [] };
+/** Create a temp dir with a git repo so writeActiveIntent works. */
+function withGitTempDir(fn: (cwd: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), "pi-panel-test-"));
+  try {
+    execFileSync("git", ["init", "-b", "main"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+    writeFileSync(join(dir, "README"), "x");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+    fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const emptyStore: IntentStore = { intents: [] };
 const storeWithIntent: IntentStore = {
-  activeIntentId: "id1",
   intents: [makeIntent()],
 };
 
@@ -58,10 +78,13 @@ describe("createIntentSidebar", () => {
     assert.ok(lines.some((l) => l.includes("no intent set")));
   });
 
-  test("renders active intent title", () => {
-    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
-    const lines = panel.render(30);
-    assert.ok(lines.some((l) => l.includes("Fix the auth bug")));
+  test("renders active intent title when active intent is set", () => {
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme(), cwd);
+      const lines = panel.render(30);
+      assert.ok(lines.some((l) => l.includes("Fix the auth bug")));
+    });
   });
 
   test("height fills terminal rows (rows - 1 content + bottom border)", () => {
@@ -71,93 +94,125 @@ describe("createIntentSidebar", () => {
     assert.equal(lines.length, rows);
   });
 
-  test("update() changes the store", () => {
-    const panel = createIntentSidebar(emptyStore, mockTui(), mockTheme());
-    const lines1 = panel.render(30);
-    assert.ok(lines1.some((l) => l.includes("no intent set")));
+  test("update() shows active intent title when active is set", () => {
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const panel = createIntentSidebar(emptyStore, mockTui(), mockTheme(), cwd);
+      const lines1 = panel.render(30);
+      assert.ok(lines1.some((l) => l.includes("no intent set")));
 
-    panel.update(storeWithIntent, null);
-    const lines2 = panel.render(30);
-    assert.ok(lines2.some((l) => l.includes("Fix the auth bug")));
+      panel.update(storeWithIntent, null, null, null, null, cwd);
+      const lines2 = panel.render(30);
+      assert.ok(lines2.some((l) => l.includes("Fix the auth bug")));
+    });
   });
 
-  test("shows DEFINING badge when phase is defining", () => {
-    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
-    panel.update(storeWithIntent, null, "defining");
-    const lines = panel.render(30);
-    assert.ok(lines.some((l) => l.includes("[DEFINING]")));
+  test("shows DEFINING badge when phase is defining and active intent set", () => {
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme(), cwd);
+      panel.update(storeWithIntent, null, "defining", null, null, cwd);
+      const lines = panel.render(30);
+      assert.ok(lines.some((l) => l.includes("[DEFINING]")));
+    });
   });
 
-  test("shows IMPLEMENTING badge when phase is implementing", () => {
-    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
-    panel.update(storeWithIntent, null, "implementing");
-    const lines = panel.render(30);
-    assert.ok(lines.some((l) => l.includes("[IMPLEMENTING]")));
+  test("shows IMPLEMENTING badge when phase is implementing and active intent set", () => {
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme(), cwd);
+      panel.update(storeWithIntent, null, "implementing", null, null, cwd);
+      const lines = panel.render(30);
+      assert.ok(lines.some((l) => l.includes("[IMPLEMENTING]")));
+    });
   });
 
   test("renders markdown in intent titles", () => {
-    const storeWithMarkdownTitle: IntentStore = {
-      activeIntentId: "id1",
-      intents: [makeIntent({ title: "**Critical** auth fix" })],
-    };
-    const panel = createIntentSidebar(
-      storeWithMarkdownTitle,
-      mockTui(),
-      mockTheme(),
-    );
-    const rendered = stripAnsi(panel.render(40).join("\n"));
-    assert.match(rendered, /Critical auth fix/);
-    assert.doesNotMatch(rendered, /\*\*Critical\*\*/);
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const storeWithMarkdownTitle: IntentStore = {
+        intents: [makeIntent({ title: "**Critical** auth fix" })],
+      };
+      const panel = createIntentSidebar(
+        storeWithMarkdownTitle,
+        mockTui(),
+        mockTheme(),
+        cwd,
+      );
+      const rendered = stripAnsi(panel.render(40).join("\n"));
+      assert.match(rendered, /Critical auth fix/);
+      assert.doesNotMatch(rendered, /\*\*Critical\*\*/);
+    });
   });
 
   test("renders markdown in description excerpts", () => {
-    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
-    panel.update(
-      storeWithIntent,
-      "**Critical** auth fix\n\n- update login flow",
-      "implementing",
-    );
-    const rendered = stripAnsi(panel.render(40).join("\n"));
-    assert.match(rendered, /Critical/);
-    assert.match(rendered, /update login flow/);
-    assert.doesNotMatch(rendered, /\*\*Critical\*\*/);
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme(), cwd);
+      panel.update(
+        storeWithIntent,
+        "**Critical** auth fix\n\n- update login flow",
+        "implementing",
+        null,
+        null,
+        cwd,
+      );
+      const rendered = stripAnsi(panel.render(40).join("\n"));
+      assert.match(rendered, /Critical/);
+      assert.match(rendered, /update login flow/);
+      assert.doesNotMatch(rendered, /\*\*Critical\*\*/);
+    });
   });
 
   test("renders markdown in understanding section", () => {
-    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
-    panel.update(
-      storeWithIntent,
-      null,
-      "implementing",
-      "# Findings\n\n**Next step**\n- add coverage",
-    );
-    const rendered = stripAnsi(panel.render(40).join("\n"));
-    assert.match(rendered, /Findings/);
-    assert.match(rendered, /Next step/);
-    assert.match(rendered, /add coverage/);
-    assert.doesNotMatch(rendered, /# Findings/);
-    assert.doesNotMatch(rendered, /\*\*Next step\*\*/);
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme(), cwd);
+      panel.update(
+        storeWithIntent,
+        null,
+        "implementing",
+        "# Findings\n\n**Next step**\n- add coverage",
+        null,
+        cwd,
+      );
+      const rendered = stripAnsi(panel.render(40).join("\n"));
+      assert.match(rendered, /Findings/);
+      assert.match(rendered, /Next step/);
+      assert.match(rendered, /add coverage/);
+      assert.doesNotMatch(rendered, /# Findings/);
+      assert.doesNotMatch(rendered, /\*\*Next step\*\*/);
+    });
   });
 
-  test("shows REVIEWING badge when phase is reviewing", () => {
-    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
-    panel.update(storeWithIntent, null, "reviewing");
-    const lines = panel.render(30);
-    assert.ok(lines.some((l) => l.includes("[REVIEWING]")));
+  test("shows REVIEWING badge when phase is reviewing and active intent set", () => {
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme(), cwd);
+      panel.update(storeWithIntent, null, "reviewing", null, null, cwd);
+      const lines = panel.render(30);
+      assert.ok(lines.some((l) => l.includes("[REVIEWING]")));
+    });
   });
 
-  test("shows DONE badge when phase is done", () => {
-    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
-    panel.update(storeWithIntent, null, "done");
-    const lines = panel.render(30);
-    assert.ok(lines.some((l) => l.includes("[DONE]")));
+  test("shows DONE badge when phase is done and active intent set", () => {
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme(), cwd);
+      panel.update(storeWithIntent, null, "done", null, null, cwd);
+      const lines = panel.render(30);
+      assert.ok(lines.some((l) => l.includes("[DONE]")));
+    });
   });
 
-  test("shows BLOCKED badge when phase is blocked-on-child", () => {
-    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
-    panel.update(storeWithIntent, null, "blocked-on-child");
-    const lines = panel.render(30);
-    assert.ok(lines.some((l) => l.includes("[BLOCKED]")));
+  test("shows BLOCKED badge when phase is blocked-on-child and active intent set", () => {
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme(), cwd);
+      panel.update(storeWithIntent, null, "blocked-on-child", null, null, cwd);
+      const lines = panel.render(30);
+      assert.ok(lines.some((l) => l.includes("[BLOCKED]")));
+    });
   });
 
   test("no badge when no active intent", () => {
@@ -168,42 +223,50 @@ describe("createIntentSidebar", () => {
   });
 
   test("no badge when phase is null", () => {
-    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
-    panel.update(storeWithIntent, null, null);
-    const lines = panel.render(30);
-    assert.ok(!lines.some((l) => l.includes("[DEFINING]")));
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme(), cwd);
+      panel.update(storeWithIntent, null, null, null, null, cwd);
+      const lines = panel.render(30);
+      assert.ok(!lines.some((l) => l.includes("[DEFINING]")));
+    });
   });
 
   test("shows breadcrumb to root when intent has a parent", () => {
-    const root: Intent = makeIntent({
-      id: "root",
-      title: "Ship the auth refactor",
-      parentId: null,
+    withGitTempDir((cwd) => {
+      const root: Intent = makeIntent({
+        id: "root",
+        title: "Ship the auth refactor",
+        parentId: null,
+      });
+      const child: Intent = makeIntent({
+        id: "child",
+        title: "Add auth tests",
+        parentId: "root",
+      });
+      const store: IntentStore = {
+        intents: [root, child],
+      };
+      writeActiveIntent(cwd, "child");
+      const panel = createIntentSidebar(store, mockTui(), mockTheme(), cwd);
+      const lines = panel.render(40);
+      assert.ok(
+        lines.some((l) => l.includes("Ship the auth refactor")),
+        "root title should appear as breadcrumb",
+      );
+      assert.ok(
+        lines.some((l) => l.includes("Add auth tests")),
+        "active child title should appear",
+      );
     });
-    const child: Intent = makeIntent({
-      id: "child",
-      title: "Add auth tests",
-      parentId: "root",
-    });
-    const store: IntentStore = {
-      activeIntentId: "child",
-      intents: [root, child],
-    };
-    const panel = createIntentSidebar(store, mockTui(), mockTheme());
-    const lines = panel.render(40);
-    assert.ok(
-      lines.some((l) => l.includes("Ship the auth refactor")),
-      "root title should appear as breadcrumb",
-    );
-    assert.ok(
-      lines.some((l) => l.includes("Add auth tests")),
-      "active child title should appear",
-    );
   });
 
   test("no breadcrumb for top-level intents", () => {
-    const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme());
-    const lines = panel.render(30);
-    assert.ok(!lines.some((l) => l.includes("↱")));
+    withGitTempDir((cwd) => {
+      writeActiveIntent(cwd, "id1");
+      const panel = createIntentSidebar(storeWithIntent, mockTui(), mockTheme(), cwd);
+      const lines = panel.render(30);
+      assert.ok(!lines.some((l) => l.includes("↱")));
+    });
   });
 });

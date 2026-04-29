@@ -31,6 +31,7 @@ import {
   type Intent,
   type IntentPhase,
 } from "../intent/store.ts";
+import { writeActiveIntent } from "../intent/active-local.ts";
 import { FlightTable, type AgentRole, type IntentFlight } from "./state.ts";
 import { dispatchAgent, type DispatchOptions } from "./dispatcher.ts";
 import type { AgentDefinition } from "./agent-defs.ts";
@@ -210,9 +211,9 @@ export class OrchestratorDriver {
       kind: "child-done",
       body: `Child intent "${child.title}" (${child.id}) reached done. Resuming implementation.`,
     });
-    store.activeIntentId = parent.id;
+    writeActiveIntent(this.cwd, parent.id);
     transitionPhase(store, parent.id, "implementing");
-    saveStore(this.cwd, store);
+    await saveStore(this.cwd, store);
     this.pi.events.emit("intent:phase-changed", {
       id: parent.id,
       from: "blocked-on-child",
@@ -469,7 +470,7 @@ export class OrchestratorDriver {
             : ""),
       });
       transitionPhase(store, intent.id, "reviewing");
-      saveStore(this.cwd, store);
+      await saveStore(this.cwd, store);
       this.pi.events.emit("intent:phase-changed", {
         id: intent.id,
         from: "implementing",
@@ -492,7 +493,7 @@ export class OrchestratorDriver {
           reviewedAt: signal.reportedAt,
         });
         transitionPhase(store, intent.id, "proposed-ready");
-        saveStore(this.cwd, store);
+        await saveStore(this.cwd, store);
         this.pi.events.emit("intent:phase-changed", {
           id: intent.id,
           from: "reviewing",
@@ -525,7 +526,7 @@ export class OrchestratorDriver {
         // the driver does not re-dispatch; the flight is idle until the
         // human intervenes via /intent.
         transitionPhase(store, intent.id, "implementing");
-        saveStore(this.cwd, store);
+        await saveStore(this.cwd, store);
         return;
       }
       intent.reworkCount += 1;
@@ -534,7 +535,7 @@ export class OrchestratorDriver {
       // flight so the next implementer turn sees them in its prompt.
       flight.pendingSignal = signal;
       transitionPhase(store, intent.id, "implementing");
-      saveStore(this.cwd, store);
+      await saveStore(this.cwd, store);
       this.pi.events.emit("intent:phase-changed", {
         id: intent.id,
         from: "reviewing",
@@ -580,8 +581,9 @@ export class OrchestratorDriver {
       const child = createIntent(store, this.cwd, signal.description, {
         parentId: intent.id,
       });
-      // createIntent already sets activeIntentId to the child.
-      saveStore(this.cwd, store);
+      // Set the child as the active intent for this worktree.
+      writeActiveIntent(this.cwd, child.id);
+      await saveStore(this.cwd, store);
 
       // Dispose the parent's agents so their sessions don't hold stale
       // state through the child's run. They'll be respawned fresh when

@@ -11,6 +11,7 @@ import {
   readUnderstanding,
   canTransition,
 } from "./store.ts";
+import { readActiveIntent } from "./active-local.ts";
 import { generateTitle, generateFallbackTitle } from "./title-generator.ts";
 
 export type OverlayAction =
@@ -88,7 +89,8 @@ export class IntentOverlayComponent implements Focusable {
     // Build menu items - include actions for active intent directly in menu
     this.menuItems = [];
 
-    const active = store.intents.find((i) => i.id === store.activeIntentId);
+    const activeIntentId = readActiveIntent(cwd);
+    const active = store.intents.find((i) => i.id === activeIntentId);
     if (active) {
       // Add phase-specific actions for active intent
       const actions = this.getAvailableActions(active);
@@ -165,7 +167,7 @@ export class IntentOverlayComponent implements Focusable {
       } else {
         // Must be an action for the active intent
         const active = this.store.intents.find(
-          (i) => i.id === this.store.activeIntentId,
+          (i) => i.id === readActiveIntent(this.cwd),
         );
         if (active) {
           this.executeAction(selected, active);
@@ -334,7 +336,7 @@ export class IntentOverlayComponent implements Focusable {
     const actions: string[] = [];
 
     // Always allow switching if not active
-    if (intent.id !== this.store.activeIntentId) {
+    if (intent.id !== readActiveIntent(this.cwd)) {
       actions.push("Switch to this intent");
     }
 
@@ -576,7 +578,7 @@ export class IntentOverlayComponent implements Focusable {
     for (let i = 0; i < intents.length; i++) {
       const intent = intents[i];
       const isSelected = i === this.state.selected;
-      const isActive = intent.id === this.store.activeIntentId;
+      const isActive = intent.id === readActiveIntent(this.cwd);
       const prefix = isSelected ? " ▶ " : "   ";
 
       // Format: Title [PHASE] [ACTIVE]
@@ -622,7 +624,7 @@ export class IntentOverlayComponent implements Focusable {
 
     // Build all content lines first, then window them for scrolling
     const allLines: string[] = [];
-    const isActive = intent.id === this.store.activeIntentId;
+    const isActive = intent.id === readActiveIntent(this.cwd);
     const activeLabel = isActive ? " [ACTIVE]" : "";
 
     // Header: Title and status

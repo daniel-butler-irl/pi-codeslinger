@@ -27,9 +27,8 @@ function makeIntent(overrides: Partial<Intent> = {}): Intent {
   };
 }
 
-const emptyStore: IntentStore = { activeIntentId: null, intents: [] };
+const emptyStore: IntentStore = { intents: [] };
 const storeWithIntent: IntentStore = {
-  activeIntentId: "id1",
   intents: [makeIntent()],
 };
 
@@ -197,7 +196,6 @@ describe("IntentOverlayComponent", () => {
 
   test("list mode shows all intents with their phases", () => {
     const store: IntentStore = {
-      activeIntentId: null, // No active intent to simplify menu
       intents: [
         makeIntent({ id: "id1", title: "First intent", phase: "defining" }),
         makeIntent({
@@ -266,7 +264,6 @@ describe("IntentOverlayComponent", () => {
   test("escape in list mode returns to menu", () => {
     // Use store with no active intent to make menu predictable
     const store: IntentStore = {
-      activeIntentId: null,
       intents: [makeIntent()],
     };
 
@@ -305,7 +302,6 @@ describe("IntentOverlayComponent", () => {
 
   test("selecting an intent from list shows detail view", () => {
     const store: IntentStore = {
-      activeIntentId: null, // No active intent for predictable menu
       intents: [
         makeIntent({ id: "id1", title: "First intent", phase: "defining" }),
       ],

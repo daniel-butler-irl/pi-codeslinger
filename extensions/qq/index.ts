@@ -32,6 +32,7 @@ import {
   transitionPhase,
   writeUnderstanding,
 } from "../intent/store.ts";
+import { readActiveIntent, writeActiveIntent } from "../intent/active-local.ts";
 import { QqOverlayComponent, type QqTranscriptEntry } from "./overlay.ts";
 
 const QQ_APPEND_SYSTEM_PROMPT = `## Quick Question Side Session
@@ -389,7 +390,8 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
         const intent = createIntent(store, cwd, params.description, {
           parentId: parentIntentId ?? null,
         });
-        saveStore(cwd, store);
+        writeActiveIntent(cwd, intent.id);
+        await saveStore(cwd, store);
         pi.events.emit("intent:created", { id: intent.id });
         pi.events.emit("intent:active-changed", { id: intent.id });
 
@@ -426,7 +428,7 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
         _ctx: ExtensionContext,
       ) => {
         const store = loadStore(cwd);
-        const active = getActiveIntent(store);
+        const active = getActiveIntent(store, cwd);
         if (!active) return noActiveIntent;
         writeUnderstanding(cwd, active.id, params.understanding);
         pi.events.emit("intent:updated", { id: active.id });
@@ -449,7 +451,7 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
       parameters: Type.Object({}),
       execute: async () => {
         const store = loadStore(cwd);
-        const active = getActiveIntent(store);
+        const active = getActiveIntent(store, cwd);
         if (!active) return noActiveIntent;
         const content = loadIntentContent(cwd, active.id);
         return {
@@ -483,17 +485,18 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
         params: { filter?: "all" | "active" | "done" | "children" },
       ) => {
         const store = loadStore(cwd);
+        const activeIntentId = readActiveIntent(cwd);
         const filter = params.filter ?? "all";
         let intents = store.intents;
 
-        if (filter === "active" && store.activeIntentId) {
+        if (filter === "active" && activeIntentId) {
           intents = intents.filter(
-            (intent) => intent.id === store.activeIntentId,
+            (intent) => intent.id === activeIntentId,
           );
         } else if (filter === "done") {
           intents = intents.filter((intent) => intent.phase === "done");
-        } else if (filter === "children" && store.activeIntentId) {
-          intents = getChildren(store, store.activeIntentId);
+        } else if (filter === "children" && activeIntentId) {
+          intents = getChildren(store, activeIntentId);
         }
 
         if (intents.length === 0) {
@@ -510,7 +513,7 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
         }
 
         const lines = intents.map((intent) => {
-          const active = intent.id === store.activeIntentId ? " [ACTIVE]" : "";
+          const active = intent.id === activeIntentId ? " [ACTIVE]" : "";
           const parent = intent.parentId
             ? ` (child of ${intent.parentId})`
             : "";
@@ -541,7 +544,7 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
       parameters: Type.Object({}),
       execute: async () => {
         const store = loadStore(cwd);
-        const active = getActiveIntent(store);
+        const active = getActiveIntent(store, cwd);
         if (!active) return noActiveIntent;
         const content = readLog(cwd, active.id);
         return {
@@ -563,7 +566,7 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
       parameters: Type.Object({}),
       execute: async () => {
         const store = loadStore(cwd);
-        const active = getActiveIntent(store);
+        const active = getActiveIntent(store, cwd);
         if (!active) return noActiveIntent;
         const content = readUnderstanding(cwd, active.id);
         return {
@@ -586,7 +589,7 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
       parameters: Type.Object({}),
       execute: async () => {
         const store = loadStore(cwd);
-        const active = getActiveIntent(store);
+        const active = getActiveIntent(store, cwd);
         if (!active) return noActiveIntent;
         const result = readVerification(cwd, active.id);
         if (!result) {
@@ -653,8 +656,8 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
           };
         }
 
-        store.activeIntentId = intent.id;
-        saveStore(cwd, store);
+        writeActiveIntent(cwd, intent.id);
+        await saveStore(cwd, store);
         pi.events.emit("intent:active-changed", { id: intent.id });
         return {
           content: [
@@ -676,7 +679,7 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
       parameters: Type.Object({}),
       execute: async () => {
         const store = loadStore(cwd);
-        const active = getActiveIntent(store);
+        const active = getActiveIntent(store, cwd);
         if (!active) return noActiveIntent;
         if (active.phase !== "defining") {
           return {
@@ -708,7 +711,7 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
 
         const from = active.phase;
         transitionPhase(store, active.id, "implementing");
-        saveStore(cwd, store);
+        await saveStore(cwd, store);
         pi.events.emit("intent:phase-changed", {
           id: active.id,
           from,
@@ -741,7 +744,7 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
       }),
       execute: async (_toolCallId: string, params: { intentId?: string }) => {
         const store = loadStore(cwd);
-        const targetId = params.intentId ?? store.activeIntentId ?? undefined;
+        const targetId = params.intentId ?? readActiveIntent(cwd) ?? undefined;
         if (!targetId) return noActiveIntent;
         const target = store.intents.find((intent) => intent.id === targetId);
         if (!target) {
@@ -772,10 +775,15 @@ function buildQqIntentTools(pi: ExtensionAPI, cwd: string): any[] {
           };
         }
 
-        saveStore(cwd, store);
+        // Clear active state if this was the active intent.
+        if (readActiveIntent(cwd) === targetId) {
+          writeActiveIntent(cwd, null);
+        }
+        await saveStore(cwd, store);
         pi.events.emit("intent:deleted", { id: targetId });
-        if (store.activeIntentId) {
-          pi.events.emit("intent:active-changed", { id: store.activeIntentId });
+        const newActive = readActiveIntent(cwd);
+        if (newActive) {
+          pi.events.emit("intent:active-changed", { id: newActive });
         }
         return {
           content: [

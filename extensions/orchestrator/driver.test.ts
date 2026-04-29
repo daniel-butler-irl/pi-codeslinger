@@ -7,7 +7,8 @@
  */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "os";
 import { join } from "path";
 import { OrchestratorDriver } from "./driver.ts";
@@ -29,10 +30,27 @@ import {
   readLog,
   type IntentStore,
 } from "../intent/store.ts";
+import { readActiveIntent, writeActiveIntent } from "../intent/active-local.ts";
+
+/**
+ * Drain all pending async operations including lockfile I/O. The
+ * proper-lockfile retries have a 50ms minimum timeout, so we need a
+ * real timer (not just setImmediate) to let them complete.
+ */
+async function drainAsync(ms = 200): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function withTempDir(fn: (cwd: string) => Promise<void> | void) {
   const dir = mkdtempSync(join(tmpdir(), "pi-driver-test-"));
   try {
+    // Init a git repo so writeActiveIntent / readActiveIntent work.
+    execFileSync("git", ["init", "-b", "main"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+    writeFileSync(join(dir, "README"), "x");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
     await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -143,10 +161,10 @@ function buildDriver(opts: {
   return { pi, driver };
 }
 
-function seedIntentAtImplementing(
+async function seedIntentAtImplementing(
   cwd: string,
   verificationCommand = "true",
-): { store: IntentStore; id: string } {
+): Promise<{ store: IntentStore; id: string }> {
   const store = loadStore(cwd);
   const intent = createIntent(store, cwd, "test work");
   saveIntentContent(
@@ -155,14 +173,14 @@ function seedIntentAtImplementing(
     `# Intent\n\n## Description\ntest\n\n## Success Criteria\n- passes verification\n\n## Verification\n\n\`\`\`bash\n${verificationCommand}\n\`\`\`\n`,
   );
   transitionPhase(store, intent.id, "implementing");
-  saveStore(cwd, store);
+  await saveStore(cwd, store);
   return { store, id: intent.id };
 }
 
 describe("OrchestratorDriver — implementer proposal moves to reviewing", () => {
   test("after proposal, phase becomes reviewing", async () => {
     await withTempDir(async (cwd) => {
-      const { id } = seedIntentAtImplementing(cwd);
+      const { id } = await seedIntentAtImplementing(cwd);
       const { pi } = buildDriver({
         cwd,
         impl: [
@@ -187,9 +205,8 @@ describe("OrchestratorDriver — implementer proposal moves to reviewing", () =>
         from: "defining",
         to: "implementing",
       });
-      // Allow async chain to complete.
-      await new Promise((r) => setImmediate(r));
-      await new Promise((r) => setImmediate(r));
+      // Allow async chain including lockfile I/O to complete.
+      await drainAsync();
 
       const store = loadStore(cwd);
       const after = store.intents.find((i) => i.id === id)!;
@@ -202,7 +219,7 @@ describe("OrchestratorDriver — implementer proposal moves to reviewing", () =>
 describe("OrchestratorDriver — reviewer pass moves to done", () => {
   test("pass verdict transitions to done", async () => {
     await withTempDir(async (cwd) => {
-      const { id } = seedIntentAtImplementing(cwd);
+      const { id } = await seedIntentAtImplementing(cwd);
       const { pi } = buildDriver({
         cwd,
         impl: [
@@ -237,9 +254,7 @@ describe("OrchestratorDriver — reviewer pass moves to done", () => {
         from: "defining",
         to: "implementing",
       });
-      await new Promise((r) => setImmediate(r));
-      await new Promise((r) => setImmediate(r));
-      await new Promise((r) => setImmediate(r));
+      await drainAsync();
 
       const store = loadStore(cwd);
       const after = store.intents.find((i) => i.id === id)!;
@@ -251,7 +266,7 @@ describe("OrchestratorDriver — reviewer pass moves to done", () => {
 describe("OrchestratorDriver — reviewer rework increments and returns", () => {
   test("rework verdict transitions back to implementing and bumps reworkCount", async () => {
     await withTempDir(async (cwd) => {
-      const { id } = seedIntentAtImplementing(cwd);
+      const { id } = await seedIntentAtImplementing(cwd);
       const { pi } = buildDriver({
         cwd,
         impl: [
@@ -289,9 +304,7 @@ describe("OrchestratorDriver — reviewer rework increments and returns", () => 
         from: "defining",
         to: "implementing",
       });
-      for (let i = 0; i < 8; i++) {
-        await new Promise((r) => setImmediate(r));
-      }
+      await drainAsync();
 
       const store = loadStore(cwd);
       const after = store.intents.find((i) => i.id === id)!;
@@ -305,7 +318,7 @@ describe("OrchestratorDriver — reviewer rework increments and returns", () => 
 describe("OrchestratorDriver — spawn-child pauses parent and creates child", () => {
   test("implementer spawn_child produces child intent and blocks parent", async () => {
     await withTempDir(async (cwd) => {
-      const { id: parentId } = seedIntentAtImplementing(cwd);
+      const { id: parentId } = await seedIntentAtImplementing(cwd);
       const { pi } = buildDriver({
         cwd,
         impl: [
@@ -327,9 +340,7 @@ describe("OrchestratorDriver — spawn-child pauses parent and creates child", (
         from: "defining",
         to: "implementing",
       });
-      for (let i = 0; i < 6; i++) {
-        await new Promise((r) => setImmediate(r));
-      }
+      await drainAsync(200);
 
       const store = loadStore(cwd);
       const parent = store.intents.find((i) => i.id === parentId)!;
@@ -337,7 +348,7 @@ describe("OrchestratorDriver — spawn-child pauses parent and creates child", (
       const children = store.intents.filter((i) => i.parentId === parentId);
       assert.equal(children.length, 1);
       assert.equal(children[0].phase, "defining");
-      assert.equal(store.activeIntentId, children[0].id);
+      assert.equal(readActiveIntent(cwd), children[0].id);
       assert.ok(readLog(cwd, parentId).includes("spawn-child"));
     });
   });
@@ -347,26 +358,24 @@ describe("OrchestratorDriver — child done resumes parent", () => {
   test("parent unblocks to implementing when child reaches done", async () => {
     await withTempDir(async (cwd) => {
       // Seed parent at implementing, then blocked-on-child.
-      const { id: parentId } = seedIntentAtImplementing(cwd);
+      const { id: parentId } = await seedIntentAtImplementing(cwd);
       const preload = loadStore(cwd);
-      const parentTarget = preload.intents.find((i) => i.id === parentId)!;
       transitionPhase(preload, parentId, "blocked-on-child");
       // Create a child manually to simulate the spawn having already happened.
       const child = createIntent(preload, cwd, "prerequisite work", {
         parentId,
       });
-      saveStore(cwd, preload);
+      await saveStore(cwd, preload);
 
       // Mark child as done so the driver's phase-changed handler runs
       // the resume-parent branch.
       const midStore = loadStore(cwd);
-      const childTarget = midStore.intents.find((i) => i.id === child.id)!;
       // Legal path: defining → implementing → reviewing → proposed-ready → done
       transitionPhase(midStore, child.id, "implementing");
       transitionPhase(midStore, child.id, "reviewing");
       transitionPhase(midStore, child.id, "proposed-ready");
       transitionPhase(midStore, child.id, "done");
-      saveStore(cwd, midStore);
+      await saveStore(cwd, midStore);
 
       const { pi } = buildDriver({ cwd });
       pi.events.emit("intent:phase-changed", {
@@ -374,14 +383,12 @@ describe("OrchestratorDriver — child done resumes parent", () => {
         from: "reviewing",
         to: "done",
       });
-      for (let i = 0; i < 6; i++) {
-        await new Promise((r) => setImmediate(r));
-      }
+      await drainAsync();
 
       const afterStore = loadStore(cwd);
       const parentAfter = afterStore.intents.find((i) => i.id === parentId)!;
       assert.equal(parentAfter.phase, "implementing");
-      assert.equal(afterStore.activeIntentId, parentId);
+      assert.equal(readActiveIntent(cwd), parentId);
       assert.ok(readLog(cwd, parentId).includes("child-done"));
     });
   });
@@ -403,7 +410,7 @@ describe("OrchestratorDriver — child depth cap", () => {
         `# Intent\n\n## Description\nleaf\n\n## Success Criteria\n- verify\n\n## Verification\n\n\`\`\`bash\ntrue\n\`\`\`\n`,
       );
       transitionPhase(store, leaf.id, "implementing");
-      saveStore(cwd, store);
+      await saveStore(cwd, store);
 
       // Build a driver manually so we can set maxChildIntentDepth: 2.
       const { pi } = mockPi();
@@ -443,9 +450,7 @@ describe("OrchestratorDriver — child depth cap", () => {
         from: "defining",
         to: "implementing",
       });
-      for (let i = 0; i < 6; i++) {
-        await new Promise((r) => setImmediate(r));
-      }
+      await drainAsync();
 
       // No new child was created — store has exactly the original 3.
       const after = loadStore(cwd);
@@ -458,12 +463,12 @@ describe("OrchestratorDriver — child depth cap", () => {
 describe("OrchestratorDriver — rework cap", () => {
   test("once rework cap reached, does not re-dispatch", async () => {
     await withTempDir(async (cwd) => {
-      const { id } = seedIntentAtImplementing(cwd);
+      const { id } = await seedIntentAtImplementing(cwd);
       // Force intent to have already hit rework cap.
       const preload = loadStore(cwd);
       const target = preload.intents.find((i) => i.id === id)!;
       target.reworkCount = 5;
-      saveStore(cwd, preload);
+      await saveStore(cwd, preload);
 
       const { pi } = buildDriver({
         cwd,
@@ -500,9 +505,7 @@ describe("OrchestratorDriver — rework cap", () => {
         from: "defining",
         to: "implementing",
       });
-      for (let i = 0; i < 8; i++) {
-        await new Promise((r) => setImmediate(r));
-      }
+      await drainAsync();
 
       // Phase stays at implementing (cap reached; human must act).
       const store = loadStore(cwd);
@@ -517,7 +520,7 @@ describe("OrchestratorDriver — rework cap", () => {
 describe("OrchestratorDriver — main-chat reviewer path", () => {
   test("review-signal event transitions to proposed-ready on pass", async () => {
     await withTempDir(async (cwd) => {
-      const { id } = seedIntentAtImplementing(cwd);
+      const { id } = await seedIntentAtImplementing(cwd);
 
       const { pi } = mockPi();
       const defs = new Map([
@@ -575,9 +578,7 @@ describe("OrchestratorDriver — main-chat reviewer path", () => {
         from: "defining",
         to: "implementing",
       });
-      for (let i = 0; i < 6; i++) {
-        await new Promise((r) => setImmediate(r));
-      }
+      await drainAsync();
 
       const midStore = loadStore(cwd);
       assert.equal(
@@ -594,9 +595,7 @@ describe("OrchestratorDriver — main-chat reviewer path", () => {
         nextActions: [],
         reportedAt: new Date().toISOString(),
       });
-      for (let i = 0; i < 4; i++) {
-        await new Promise((r) => setImmediate(r));
-      }
+      await drainAsync();
 
       const afterStore = loadStore(cwd);
       assert.equal(
@@ -610,7 +609,7 @@ describe("OrchestratorDriver — main-chat reviewer path", () => {
 describe("OrchestratorDriver — main-chat implementer path", () => {
   test("proposal-signal event transitions implementing → reviewing", async () => {
     await withTempDir(async (cwd) => {
-      const { id } = seedIntentAtImplementing(cwd);
+      const { id } = await seedIntentAtImplementing(cwd);
 
       const { pi } = mockPi();
       const defs = new Map([
@@ -655,9 +654,7 @@ describe("OrchestratorDriver — main-chat implementer path", () => {
         from: "defining",
         to: "implementing",
       });
-      for (let i = 0; i < 4; i++) {
-        await new Promise((r) => setImmediate(r));
-      }
+      await drainAsync();
 
       // Phase still implementing — waiting for main-chat AI to call propose_done.
       const midStore = loadStore(cwd);
@@ -673,9 +670,7 @@ describe("OrchestratorDriver — main-chat implementer path", () => {
         artifacts: [],
         proposedAt: new Date().toISOString(),
       });
-      for (let i = 0; i < 4; i++) {
-        await new Promise((r) => setImmediate(r));
-      }
+      await drainAsync();
 
       const afterStore = loadStore(cwd);
       assert.equal(

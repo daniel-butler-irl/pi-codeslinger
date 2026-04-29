@@ -20,6 +20,7 @@ import type {
   ReviewResult,
 } from "./store.ts";
 import { getActiveIntent, getRoot } from "./store.ts";
+import { readActiveIntent } from "./active-local.ts";
 
 function wordWrap(text: string, maxWidth: number): string[] {
   if (!text || maxWidth <= 0) return [];
@@ -101,8 +102,10 @@ export function createIntentSidebar(
   store: IntentStore,
   tui: TUI,
   theme: Theme,
+  cwd: string = process.cwd(),
 ) {
   let currentStore = store;
+  let currentCwd = cwd;
   let shortDesc: string | null = null;
   let activePhase: IntentPhase | null = null;
   let understanding: string | null = null;
@@ -205,7 +208,7 @@ export function createIntentSidebar(
 
   return {
     render(width: number): string[] {
-      const active = getActiveIntent(currentStore);
+      const active = getActiveIntent(currentStore, currentCwd);
       const height = tui.terminal.rows;
 
       // Top border with embedded label: ╭─ Intent ──────╮
@@ -326,8 +329,10 @@ export function createIntentSidebar(
       phase?: IntentPhase | null,
       currentUnderstanding?: string | null,
       currentReviewResult?: ReviewResult | null,
+      newCwd?: string,
     ): void {
       currentStore = newStore;
+      if (newCwd) currentCwd = newCwd;
       shortDesc = desc;
       activePhase = phase ?? null;
       understanding = currentUnderstanding ?? null;

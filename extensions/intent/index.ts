@@ -8,7 +8,8 @@ import type {
 // Currently using @sinclair/typebox with Pi 0.69.0's compatibility shims
 import { Type } from "@sinclair/typebox";
 import { visibleWidth, type Component, type TUI } from "@mariozechner/pi-tui";
-import { resolve, normalize } from "path";
+import { resolve, normalize, join } from "path";
+import { rmSync } from "node:fs";
 import { validateIntentForLock } from "./validate.js";
 import {
   loadStore,
@@ -29,6 +30,7 @@ import {
   type IntentStore,
   type IntentPhase,
 } from "./store.js";
+import { readActiveIntent, writeActiveIntent } from "./active-local.js";
 import { createIntentSidebar } from "./panel.js";
 import { IntentOverlayComponent, type OverlayAction } from "./overlay.js";
 import { generateFallbackTitle } from "./title-generator.js";
@@ -65,7 +67,7 @@ class WidthLimiter implements Component {
 }
 
 export default function (pi: ExtensionAPI) {
-  let store: IntentStore = { activeIntentId: null, intents: [] };
+  let store: IntentStore = { intents: [] };
   let panel: ReturnType<typeof createIntentSidebar> | null = null;
   let tuiRef: TUI | null = null;
   let cwdRef: string = process.cwd();
@@ -82,7 +84,7 @@ export default function (pi: ExtensionAPI) {
   // ── Helpers ─────────────────────────────────────────────────────────────
 
   function refreshPanel(): void {
-    const active = getActiveIntent(store);
+    const active = getActiveIntent(store, cwdRef);
     const desc = active
       ? shortDesc(loadIntentContent(cwdRef, active.id))
       : null;
@@ -94,6 +96,7 @@ export default function (pi: ExtensionAPI) {
       active?.phase ?? null,
       understanding,
       reviewResult,
+      cwdRef,
     );
   }
 
@@ -102,8 +105,8 @@ export default function (pi: ExtensionAPI) {
     refreshPanel();
   }
 
-  function persist(cwd: string): void {
-    saveStore(cwd, store);
+  async function persist(cwd: string): Promise<void> {
+    await saveStore(cwd, store);
     refreshPanel();
   }
 
@@ -112,7 +115,7 @@ export default function (pi: ExtensionAPI) {
    * the AI assistant context. Uses display: false to keep the UI clean.
    */
   function injectIntentContext(): void {
-    const active = getActiveIntent(store);
+    const active = getActiveIntent(store, cwdRef);
     if (!active) {
       lastInjection = null;
       return;
@@ -209,7 +212,7 @@ export default function (pi: ExtensionAPI) {
    * - Understanding file modified
    */
   function needsReinjection(): boolean {
-    const active = getActiveIntent(store);
+    const active = getActiveIntent(store, cwdRef);
     if (!active) {
       return false;
     }
@@ -258,7 +261,7 @@ export default function (pi: ExtensionAPI) {
     cwdRef = ctx.cwd;
 
     // Emit event if there's an active intent so the agent knows to load understanding
-    const active = getActiveIntent(store);
+    const active = getActiveIntent(store, ctx.cwd);
     if (active) {
       pi.events.emit("intent:active-on-start", {
         id: active.id,
@@ -305,7 +308,7 @@ export default function (pi: ExtensionAPI) {
         const sidebarWidth = () =>
           Math.min(40, Math.max(24, Math.floor(tui.terminal.columns * 0.25)));
 
-        panel = createIntentSidebar(store, tui, theme);
+        panel = createIntentSidebar(store, tui, theme, cwdRef);
         refreshPanel();
 
         const stored = (tui as any).__intentOriginalChildren as
@@ -371,7 +374,7 @@ export default function (pi: ExtensionAPI) {
 
     // If not in last 20 and we have an active intent, mark that we need reinjection
     // The before_agent_start hook will handle the actual injection
-    if (!hasRecentContext && getActiveIntent(store)) {
+    if (!hasRecentContext && getActiveIntent(store, cwdRef)) {
       // Force re-injection by clearing the lastInjection state
       // This will make needsReinjection() return true
       lastInjection = null;
@@ -458,20 +461,16 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (result.type === "create") {
-      // Save the currently active intent ID so we can restore it
-      const previousActiveId = store.activeIntentId;
-
-      // Create the intent (this will auto-activate it)
+      // Create the intent (does NOT auto-activate in new API)
       const intent = createIntent(store, ctx.cwd, result.description);
 
       // Use the title from overlay if provided, otherwise generate fallback
       const title = result.title || generateFallbackTitle(result.description);
       intent.title = title;
 
-      // IMPORTANT: Restore the previous active intent (don't switch to new one)
-      store.activeIntentId = previousActiveId;
+      // Active intent is not changed — createIntent no longer auto-activates.
 
-      persist(ctx.cwd);
+      await persist(ctx.cwd);
       pi.events.emit("intent:created", { id: intent.id });
       ctx.ui.notify(
         `Intent created: "${intent.title}" (not activated)`,
@@ -482,8 +481,8 @@ export default function (pi: ExtensionAPI) {
       if (!intent) return;
 
       // Switch intent
-      store.activeIntentId = intent.id;
-      persist(ctx.cwd);
+      writeActiveIntent(ctx.cwd, intent.id);
+      await persist(ctx.cwd);
       pi.events.emit("intent:active-changed", { id: intent.id });
 
       ctx.ui.notify(`Switching to: ${intent.title}`, "info");
@@ -541,7 +540,7 @@ export default function (pi: ExtensionAPI) {
       }),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store);
+      const active = getActiveIntent(store, cwdRef);
       if (!active) {
         return {
           content: [
@@ -581,7 +580,7 @@ export default function (pi: ExtensionAPI) {
       "of the intent.md file (Description, Success Criteria, and Verification sections).",
     parameters: Type.Object({}),
     execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store);
+      const active = getActiveIntent(store, cwdRef);
       if (!active) {
         return {
           content: [
@@ -635,14 +634,15 @@ export default function (pi: ExtensionAPI) {
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const filter = params.filter ?? "all";
       const { getChildren } = await import("./store.js");
+      const activeIntentId = readActiveIntent(cwdRef);
 
       let intents = store.intents;
-      if (filter === "active" && store.activeIntentId) {
-        intents = intents.filter((i) => i.id === store.activeIntentId);
+      if (filter === "active" && activeIntentId) {
+        intents = intents.filter((i) => i.id === activeIntentId);
       } else if (filter === "done") {
         intents = intents.filter((i) => i.phase === "done");
-      } else if (filter === "children" && store.activeIntentId) {
-        intents = getChildren(store, store.activeIntentId);
+      } else if (filter === "children" && activeIntentId) {
+        intents = getChildren(store, activeIntentId);
       }
 
       if (intents.length === 0) {
@@ -659,7 +659,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       const lines = intents.map((intent) => {
-        const active = intent.id === store.activeIntentId ? " [ACTIVE]" : "";
+        const active = intent.id === activeIntentId ? " [ACTIVE]" : "";
         const parent = intent.parentId ? ` (child of ${intent.parentId})` : "";
         return (
           `- ${intent.title}${active}\n` +
@@ -691,7 +691,7 @@ export default function (pi: ExtensionAPI) {
       "other timestamped events from the intent's lifecycle.",
     parameters: Type.Object({}),
     execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store);
+      const active = getActiveIntent(store, cwdRef);
       if (!active) {
         return {
           content: [
@@ -727,7 +727,7 @@ export default function (pi: ExtensionAPI) {
       "steps needed, and open questions.",
     parameters: Type.Object({}),
     execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store);
+      const active = getActiveIntent(store, cwdRef);
       if (!active) {
         return {
           content: [
@@ -763,7 +763,7 @@ export default function (pi: ExtensionAPI) {
       "with exit codes and output.",
     parameters: Type.Object({}),
     execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store);
+      const active = getActiveIntent(store, cwdRef);
       if (!active) {
         return {
           content: [
@@ -840,8 +840,8 @@ export default function (pi: ExtensionAPI) {
           details: undefined,
         };
       }
-      store.activeIntentId = intent.id;
-      persist(cwdRef);
+      writeActiveIntent(cwdRef, intent.id);
+      await persist(cwdRef);
       pi.events.emit("intent:active-changed", { id: intent.id });
       return {
         content: [
@@ -875,7 +875,7 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store);
+      const active = getActiveIntent(store, cwdRef);
       if (!active || active.phase !== "implementing") {
         return {
           content: [
@@ -923,7 +923,7 @@ export default function (pi: ExtensionAPI) {
       }),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store);
+      const active = getActiveIntent(store, cwdRef);
       if (!active || active.phase !== "implementing") {
         return {
           content: [
@@ -1006,7 +1006,7 @@ export default function (pi: ExtensionAPI) {
       }),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store);
+      const active = getActiveIntent(store, cwdRef);
       if (!active || active.phase !== "reviewing") {
         return {
           content: [
@@ -1089,7 +1089,7 @@ export default function (pi: ExtensionAPI) {
   ): Promise<void> {
     const intent = intentId
       ? store.intents.find((i) => i.id === intentId)
-      : getActiveIntent(store);
+      : getActiveIntent(store, ctx.cwd);
     if (!intent) return;
     if (intent.phase !== "defining") {
       ctx.ui.notify(
@@ -1106,7 +1106,7 @@ export default function (pi: ExtensionAPI) {
     if (!updated || updated === current) return;
     saveIntentContent(ctx.cwd, intent.id, updated);
     intent.updatedAt = Date.now();
-    persist(ctx.cwd);
+    await persist(ctx.cwd);
     pi.events.emit("intent:updated", { id: intent.id });
     ctx.ui.notify("Intent updated", "info");
   }
@@ -1117,7 +1117,7 @@ export default function (pi: ExtensionAPI) {
   ): Promise<void> {
     const intent = intentId
       ? store.intents.find((i) => i.id === intentId)
-      : getActiveIntent(store);
+      : getActiveIntent(store, ctx.cwd);
     if (!intent || intent.phase !== "defining") return;
 
     const content = loadIntentContent(ctx.cwd, intent.id);
@@ -1131,10 +1131,10 @@ export default function (pi: ExtensionAPI) {
     }
 
     const from: IntentPhase = intent.phase;
-    const isActiveIntent = store.activeIntentId === intent.id;
+    const isActiveIntent = readActiveIntent(ctx.cwd) === intent.id;
 
     transitionPhase(store, intent.id, "implementing");
-    persist(ctx.cwd);
+    await persist(ctx.cwd);
     pi.events.emit("intent:phase-changed", {
       id: intent.id,
       from,
@@ -1159,13 +1159,13 @@ export default function (pi: ExtensionAPI) {
     if (!intent) return;
 
     const from: IntentPhase = intent.phase;
-    const isActiveIntent = store.activeIntentId === intentId;
+    const isActiveIntent = readActiveIntent(ctx.cwd) === intentId;
 
     try {
       {
         // Normal single transition
         transitionPhase(store, intentId, toPhase);
-        persist(ctx.cwd);
+        await persist(ctx.cwd);
         pi.events.emit("intent:phase-changed", {
           id: intentId,
           from,
@@ -1206,9 +1206,9 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    if (store.activeIntentId !== intentId) {
-      store.activeIntentId = intentId;
-      persist(ctx.cwd);
+    if (readActiveIntent(ctx.cwd) !== intentId) {
+      writeActiveIntent(ctx.cwd, intentId);
+      await persist(ctx.cwd);
       pi.events.emit("intent:active-changed", { id: intentId });
     }
 
@@ -1230,7 +1230,7 @@ export default function (pi: ExtensionAPI) {
   ): Promise<void> {
     const intent = intentId
       ? store.intents.find((i) => i.id === intentId)
-      : getActiveIntent(store);
+      : getActiveIntent(store, ctx.cwd);
     if (!intent) return;
     const confirmed = await ctx.ui.confirm(
       "Delete intent",
@@ -1243,7 +1243,16 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify((err as Error).message, "warning");
       return;
     }
-    persist(ctx.cwd);
+    // Clean up local audit-trail dir in the feature worktree.
+    rmSync(join(ctx.cwd, ".pi", "intents", intent.id), {
+      recursive: true,
+      force: true,
+    });
+    // Clear active state if this was the active intent.
+    if (readActiveIntent(ctx.cwd) === intent.id) {
+      writeActiveIntent(ctx.cwd, null);
+    }
+    await persist(ctx.cwd);
     pi.events.emit("intent:deleted", { id: intent.id });
   }
 }

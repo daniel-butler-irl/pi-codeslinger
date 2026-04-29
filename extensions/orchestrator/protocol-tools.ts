@@ -272,16 +272,18 @@ export function makeListIntentsTool(cwd: string): ToolDefinition {
     async execute(_toolCallId, rawParams) {
       const params = rawParams as { filter?: string };
       const { loadStore, getChildren } = await import("../intent/store.ts");
+      const { readActiveIntent } = await import("../intent/active-local.ts");
       const store = loadStore(cwd);
+      const activeIntentId = readActiveIntent(cwd);
       const filter = params.filter ?? "all";
 
       let intents = store.intents;
-      if (filter === "active" && store.activeIntentId) {
-        intents = intents.filter((i) => i.id === store.activeIntentId);
+      if (filter === "active" && activeIntentId) {
+        intents = intents.filter((i) => i.id === activeIntentId);
       } else if (filter === "done") {
         intents = intents.filter((i) => i.phase === "done");
-      } else if (filter === "children" && store.activeIntentId) {
-        intents = getChildren(store, store.activeIntentId);
+      } else if (filter === "children" && activeIntentId) {
+        intents = getChildren(store, activeIntentId);
       }
 
       if (intents.length === 0) {
@@ -289,7 +291,7 @@ export function makeListIntentsTool(cwd: string): ToolDefinition {
       }
 
       const lines = intents.map((intent) => {
-        const active = intent.id === store.activeIntentId ? " [ACTIVE]" : "";
+        const active = intent.id === activeIntentId ? " [ACTIVE]" : "";
         const parent = intent.parentId ? ` (child of ${intent.parentId})` : "";
         return (
           `- ${intent.title}${active}\n` +
