@@ -127,3 +127,52 @@ export function loadAgentDefinitions(
   }
   return out;
 }
+
+/**
+ * Audit loaded definitions against the canonical role names the driver
+ * binds to. Canonical roles MUST have provider+model — fresh-subagent
+ * dispatch is the contract. Non-canonical defs without provider+model
+ * are reported as warnings; they would silently fall back to host-session
+ * mode otherwise.
+ */
+export interface AgentDefAudit {
+  /** Hard errors: canonical names missing provider/model. */
+  errors: string[];
+  /** Soft warnings: non-canonical names missing provider/model. */
+  warnings: string[];
+}
+
+export function auditAgentDefinitions(
+  defs: Map<string, AgentDefinition>,
+  canonicalNames: string[],
+): AgentDefAudit {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const canonical = new Set(canonicalNames);
+
+  for (const name of canonicalNames) {
+    const def = defs.get(name);
+    if (!def) {
+      errors.push(
+        `Canonical agent "${name}" is not loaded; orchestrator cannot run.`,
+      );
+      continue;
+    }
+    if (!def.provider || !def.model) {
+      errors.push(
+        `Canonical agent "${name}" must declare provider and model in frontmatter.`,
+      );
+    }
+  }
+
+  for (const [name, def] of defs) {
+    if (canonical.has(name)) continue;
+    if (!def.provider || !def.model) {
+      warnings.push(
+        `Agent "${name}" has no provider/model and would run in the host session.`,
+      );
+    }
+  }
+
+  return { errors, warnings };
+}

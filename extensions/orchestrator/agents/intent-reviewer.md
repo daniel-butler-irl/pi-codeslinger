@@ -1,6 +1,8 @@
 ---
 name: intent-reviewer
 description: Adversarial reviewer for intent implementations. Read-only tool access. Actively hunts for failure modes. Default verdict is rework unless you have tried to find problems and could not. Uses terse skill.
+provider: anthropic
+model: claude-sonnet-4-6
 tools: read, grep, find, ls
 ---
 

@@ -28,15 +28,27 @@ import {
   intentVerificationPath,
   writeReviewResult,
   readReviewResult,
+  readUnderstanding,
   type IntentStore,
   type Intent,
   type IntentPhase,
 } from "../intent/store.ts";
 import { writeActiveIntent } from "../intent/active-local.ts";
-import { FlightTable, type AgentRole, type IntentFlight } from "./state.ts";
+import {
+  FlightTable,
+  type AgentRole,
+  type DispatchedAgentHandle,
+  type IntentFlight,
+  type PendingSignal,
+} from "./state.ts";
 import { dispatchAgent, type DispatchOptions } from "./dispatcher.ts";
 import type { AgentDefinition } from "./agent-defs.ts";
 import { runVerification } from "./verification.ts";
+import {
+  writePendingSignal,
+  readPendingSignal,
+  clearPendingSignal,
+} from "./signal-store.ts";
 
 /** Dispatch function type. Pluggable so tests can substitute a mock. */
 export type DispatchFn = (
@@ -83,6 +95,8 @@ export class OrchestratorDriver {
   private readonly config: DriverConfig;
   private readonly binding: AgentBinding;
   private readonly dispatch: DispatchFn;
+  /** Last known status message per agent, keyed `intentId:role`. */
+  private readonly agentStatus = new Map<string, string>();
   private unsubscribePhaseChange: (() => void) | null = null;
   private unsubscribeReviewSignal: (() => void) | null = null;
   private unsubscribeProposalSignal: (() => void) | null = null;
@@ -156,6 +170,69 @@ export class OrchestratorDriver {
         );
       },
     );
+
+    this.replayPersistedSignals().catch((err) => this.logDriverError(err));
+  }
+
+  /**
+   * On boot, scan every intent in the store for an on-disk pending-signal.json
+   * and re-route it through handleSignal. Covers crashes between signal raise
+   * and signal routing. Stale signals (mismatched phase) are cleared.
+   */
+  private async replayPersistedSignals(): Promise<void> {
+    const store = loadStore(this.cwd);
+    for (const intent of store.intents) {
+      const cwd = this.intentCwd(intent);
+      const signal = readPendingSignal(cwd, intent.id);
+      if (!signal) continue;
+      if (!this.signalMatchesPhase(signal, intent.phase)) {
+        clearPendingSignal(cwd, intent.id);
+        continue;
+      }
+      const flight = this.flights.getOrCreate(intent.id);
+      flight.pendingSignal = signal;
+      try {
+        await this.handleSignal(store, intent, flight);
+      } catch (err) {
+        this.logDriverError(err);
+      }
+    }
+  }
+
+  private signalMatchesPhase(
+    signal: PendingSignal,
+    phase: IntentPhase,
+  ): boolean {
+    switch (signal.kind) {
+      case "proposal":
+        return phase === "implementing";
+      case "spawn-child":
+        return phase === "implementing";
+      case "review":
+        return phase === "reviewing";
+      case "question":
+        return true;
+    }
+  }
+
+  /**
+   * Set (or clear) the pending signal on a flight, keeping disk in sync.
+   * Memory and disk are the same channel; on-disk file is cleared whenever
+   * memory is cleared. Routing-success paths in handleSignal call this with
+   * null to clean up.
+   */
+  private setPendingSignal(
+    intent: Intent,
+    flight: IntentFlight,
+    signal: PendingSignal | null,
+  ): void {
+    flight.pendingSignal = signal;
+    const cwd = this.intentCwd(intent);
+    if (signal) {
+      writePendingSignal(cwd, intent.id, signal);
+    } else {
+      clearPendingSignal(cwd, intent.id);
+    }
   }
 
   /**
@@ -227,6 +304,16 @@ export class OrchestratorDriver {
     writeActiveIntent(this.cwd, parent.id);
     transitionPhase(store, parent.id, "implementing");
     await saveStore(this.cwd, store);
+
+    // Stash a digest of what the child accomplished so the parent's
+    // next implementer turn picks it up via buildImplementerPrompt.
+    const understanding = readUnderstanding(this.intentCwd(child), child.id).trim();
+    const parentFlight = this.flights.getOrCreate(parent.id);
+    parentFlight.pendingChildSummary = {
+      childTitle: child.title,
+      understanding: understanding || "(child completed without leaving an understanding.md note)",
+    };
+
     this.pi.events.emit("intent:phase-changed", {
       id: parent.id,
       from: "blocked-on-child",
@@ -254,35 +341,23 @@ export class OrchestratorDriver {
     store: IntentStore,
     intent: Intent,
     from: IntentPhase,
-    isResume = false,
+    _isResume = false,
   ): Promise<void> {
     const flight = this.flights.getOrCreate(intent.id);
 
-    const defName = this.definitionNameFor("implementer");
-    const def = this.agentDefs.get(defName);
-
-    if (def?.provider && def?.model) {
-      // Subagent path: dispatch a dedicated implementer agent.
-      const impl = await this.ensureAgent(flight, "implementer");
-      await impl.prompt(this.buildImplementerPrompt(intent, flight));
-      await this.handleSignal(store, intent, flight);
-    } else if (isResume || from === "reviewing") {
-      // Two cases share this path:
-      // 1. isResume=true: session_start re-dispatched after intent extension
-      //    called ctx.newSession(); we're already in a fresh session.
-      // 2. from="reviewing": rework after review — no new session is started
-      //    (newSession is only available on ExtensionCommandContext, not on
-      //    ExtensionAPI); implementing continues in the reviewing session with
-      //    rework findings injected via buildImplementerPrompt.
-      await this.pi.sendUserMessage(
-        this.buildImplementerPrompt(intent, flight),
-        { deliverAs: "followUp" },
-      );
+    // Rework starts a clean implementer session. Dispose the prior handle
+    // so ensureAgent dispatches a fresh subagent. The new session reads
+    // intent.md + understanding.md + review-result.json on disk; it does
+    // not inherit the previous turn's transcript.
+    if (from === "reviewing") {
+      await this.disposeAgent(flight, "implementer");
     }
-    // else: initial lock/transition from user command — intent extension's
-    // handleLock/handleTransition will call ctx.newSession(), which triggers
-    // session_start, which re-emits { from: implementing, to: implementing }
-    // and hits the isResume branch above. Nothing to do here.
+
+    // Canonical agents are validated to have provider+model at load time
+    // (auditAgentDefinitions). The subagent path is the only path.
+    const impl = await this.ensureAgent(flight, "implementer");
+    await impl.prompt(this.buildImplementerPrompt(intent, flight));
+    await this.handleSignal(store, intent, flight);
   }
 
   private async onProposalSignal(
@@ -293,14 +368,14 @@ export class OrchestratorDriver {
     if (!intent) return;
 
     const flight = this.flights.getOrCreate(payload.intentId);
-    flight.pendingSignal = {
+    this.setPendingSignal(intent, flight, {
       kind: "proposal",
       agentRole: "implementer",
       intentId: payload.intentId,
       summary: payload.summary,
       artifacts: payload.artifacts,
       proposedAt: payload.proposedAt,
-    };
+    });
     await this.handleSignal(store, intent, flight);
   }
 
@@ -310,14 +385,14 @@ export class OrchestratorDriver {
     if (!intent) return;
 
     const flight = this.flights.getOrCreate(payload.intentId);
-    flight.pendingSignal = {
+    this.setPendingSignal(intent, flight, {
       kind: "spawn-child",
       agentRole: "implementer",
       parentIntentId: payload.intentId,
       description: payload.description,
       reason: payload.reason,
       requestedAt: payload.requestedAt,
-    };
+    });
     await this.handleSignal(store, intent, flight);
   }
 
@@ -356,6 +431,16 @@ export class OrchestratorDriver {
           : "");
     }
 
+    let childSummaryBlock = "";
+    if (flight.pendingChildSummary) {
+      const { childTitle, understanding } = flight.pendingChildSummary;
+      childSummaryBlock =
+        `\n\n## Child intent "${childTitle}" completed — summary\n\n` +
+        understanding +
+        `\n\nResume your work where you left off when you spawned the child.`;
+      flight.pendingChildSummary = null;
+    }
+
     return [
       `You are the implementer for intent ${intent.id}.`,
       `The contract is at: ${contractPath}`,
@@ -370,6 +455,7 @@ export class OrchestratorDriver {
         `believe all success criteria are satisfied, call propose_done with ` +
         `a summary. Do not continue producing work after calling propose_done.`,
       reworkBlock,
+      childSummaryBlock,
     ].join("\n");
   }
 
@@ -379,12 +465,13 @@ export class OrchestratorDriver {
     store: IntentStore,
     intent: Intent,
     _from: IntentPhase,
-    isResume = false,
+    _isResume = false,
   ): Promise<void> {
     const flight = this.flights.getOrCreate(intent.id);
 
     const intentId = intent.id;
     flight.onStatus = (message: string) => {
+      this.agentStatus.set(`${intentId}:reviewer`, message);
       this.pi.events.emit("orchestrator:reviewer-status", {
         intentId,
         message,
@@ -399,22 +486,12 @@ export class OrchestratorDriver {
         : "Verification failed. See verification.json.",
     });
 
-    const defName = this.definitionNameFor("reviewer");
-    const def = this.agentDefs.get(defName);
-
-    if (def?.provider && def?.model) {
-      // Subagent path: dispatch a dedicated reviewer agent.
-      const reviewer = await this.ensureAgent(flight, "reviewer");
-      await reviewer.prompt(this.buildReviewerPrompt(intent));
-      await this.handleSignal(store, intent, flight);
-    } else {
-      // Main-chat path: reviewing always runs in the current session.
-      // newSession is only available on ExtensionCommandContext (user-initiated
-      // commands), not on ExtensionAPI, so the driver cannot start a new session.
-      await this.pi.sendUserMessage(this.buildReviewerPrompt(intent), {
-        deliverAs: isResume ? "followUp" : "followUp",
-      });
-    }
+    // Each reviewing entry gets a fresh reviewer subagent so review state
+    // does not leak across cycles.
+    await this.disposeAgent(flight, "reviewer");
+    const reviewer = await this.ensureAgent(flight, "reviewer");
+    await reviewer.prompt(this.buildReviewerPrompt(intent));
+    await this.handleSignal(store, intent, flight);
   }
 
   private async onReviewSignal(payload: ReviewSignalPayload): Promise<void> {
@@ -423,7 +500,7 @@ export class OrchestratorDriver {
     if (!intent) return;
 
     const flight = this.flights.getOrCreate(payload.intentId);
-    flight.pendingSignal = {
+    this.setPendingSignal(intent, flight, {
       kind: "review",
       intentId: payload.intentId,
       verdict: payload.verdict,
@@ -431,7 +508,7 @@ export class OrchestratorDriver {
       findings: payload.findings,
       nextActions: payload.nextActions,
       reportedAt: payload.reportedAt,
-    };
+    });
     await this.handleSignal(store, intent, flight);
   }
 
@@ -468,7 +545,7 @@ export class OrchestratorDriver {
     flight: IntentFlight,
   ): Promise<void> {
     const signal = flight.pendingSignal;
-    flight.pendingSignal = null;
+    this.setPendingSignal(intent, flight, null);
     if (!signal) return;
 
     if (signal.kind === "proposal") {
@@ -598,10 +675,14 @@ export class OrchestratorDriver {
       writeActiveIntent(this.cwd, child.id);
       await saveStore(this.cwd, store);
 
-      // Dispose the parent's agents so their sessions don't hold stale
-      // state through the child's run. They'll be respawned fresh when
-      // the parent resumes.
-      await this.flights.remove(intent.id);
+      // Keep the parent's implementer subagent alive across the block.
+      // The parent's accumulated context (typically small at the moment
+      // of spawn) is preserved; on resume the prompt will inject the
+      // child's understanding.md as a digest, so the parent picks up
+      // with what the child accomplished without reading files.
+      // We do dispose the reviewer (if any) since reviewer state is
+      // never useful to a resume.
+      await this.disposeAgent(flight, "reviewer");
 
       this.pi.events.emit("intent:phase-changed", {
         id: intent.id,
@@ -615,6 +696,52 @@ export class OrchestratorDriver {
       // the child just like any top-level intent.
       return;
     }
+  }
+
+  // ── Active agent visibility ──────────────────────────────────────────
+
+  /** Snapshot of every live subagent across all intents. */
+  getActiveAgents(): Array<{
+    intentId: string;
+    intentTitle: string;
+    role: AgentRole;
+    status: string;
+    handle: DispatchedAgentHandle;
+  }> {
+    const store = loadStore(this.cwd);
+    const result: Array<{
+      intentId: string;
+      intentTitle: string;
+      role: AgentRole;
+      status: string;
+      handle: DispatchedAgentHandle;
+    }> = [];
+    for (const flight of this.flights.all()) {
+      const intent = store.intents.find((i) => i.id === flight.intentId);
+      const title = intent?.title ?? flight.intentId;
+      for (const role of Object.keys(flight.agents) as AgentRole[]) {
+        const handle = flight.agents[role];
+        if (!handle) continue;
+        const status = this.agentStatus.get(`${flight.intentId}:${role}`) ?? "running";
+        result.push({ intentId: flight.intentId, intentTitle: title, role, status, handle });
+      }
+    }
+    return result;
+  }
+
+  /** Retrieve a live agent handle by intentId + role, or undefined if not active. */
+  getAgentHandle(intentId: string, role: AgentRole): DispatchedAgentHandle | undefined {
+    return this.flights.get(intentId)?.agents[role];
+  }
+
+  private emitAgentsChanged(): void {
+    const agents = this.getActiveAgents().map(({ intentId, intentTitle, role, status }) => ({
+      intentId,
+      intentTitle,
+      role,
+      status,
+    }));
+    this.pi.events.emit("orchestrator:agents-changed", { agents });
   }
 
   // ── Agent lifecycle ──────────────────────────────────────────────────
@@ -640,7 +767,24 @@ export class OrchestratorDriver {
       definition: def,
     });
     flight.agents[role] = handle;
+    this.emitAgentsChanged();
     return handle;
+  }
+
+  private async disposeAgent(
+    flight: IntentFlight,
+    role: AgentRole,
+  ): Promise<void> {
+    const existing = flight.agents[role];
+    if (!existing) return;
+    delete flight.agents[role];
+    this.agentStatus.delete(`${flight.intentId}:${role}`);
+    try {
+      await existing.dispose();
+    } catch {
+      // per-agent dispose errors must not block the rework cycle
+    }
+    this.emitAgentsChanged();
   }
 
   private definitionNameFor(role: AgentRole): string {

@@ -12,6 +12,7 @@ import {
   type TUI,
 } from "@mariozechner/pi-tui";
 import type { Theme, ThemeColor } from "@mariozechner/pi-coding-agent";
+import type { AgentRole } from "../orchestrator/state.ts";
 import { renderMarkdownLines } from "../shared/markdown.ts";
 import type {
   IntentStore,
@@ -98,6 +99,13 @@ function getNextActions(phase: IntentPhase): string[] {
   }
 }
 
+export interface RunningAgent {
+  intentId: string;
+  intentTitle: string;
+  role: AgentRole;
+  status: string;
+}
+
 export function createIntentSidebar(
   store: IntentStore,
   tui: TUI,
@@ -111,6 +119,9 @@ export function createIntentSidebar(
   let understanding: string | null = null;
   let reviewResult: ReviewResult | null = null;
   let statusMessages: string[] = [];
+  let runningAgents: RunningAgent[] = [];
+  let selectedAgentIndex = -1;
+  let onSelectAgent: ((intentId: string, role: AgentRole) => void) | null = null;
 
   const border = (s: string) => theme.fg("borderAccent", s);
   const dim = (s: string) => theme.fg("muted", s);
@@ -304,6 +315,23 @@ export function createIntentSidebar(
         }
       }
 
+      // Running agents section (always visible if any agents active).
+      if (runningAgents.length > 0) {
+        lines.push(emptyLine(width));
+        lines.push(contentLine(width, "─ Running Agents ─", sectionTitle));
+        for (let i = 0; i < runningAgents.length; i++) {
+          const agent = runningAgents[i];
+          const label = `${agent.intentTitle} · ${agent.role}`;
+          const isSelected = i === selectedAgentIndex;
+          lines.push(
+            ...contentLines(width, label, isSelected
+              ? (s) => theme.fg("accent", s)
+              : undefined),
+          );
+          lines.push(...contentLines(width, agent.status, dim));
+        }
+      }
+
       // Pad to terminal height, leaving room for hint and border.
       const targetHeight = Math.max(lines.length + 2, height - 2);
       while (lines.length < targetHeight) {
@@ -319,7 +347,29 @@ export function createIntentSidebar(
       return lines;
     },
 
-    handleInput(_data: string): void {},
+    handleInput(data: string): void {
+      if (runningAgents.length === 0) return;
+      if (data === "\x1b[A") {
+        // up arrow
+        selectedAgentIndex =
+          selectedAgentIndex <= 0
+            ? runningAgents.length - 1
+            : selectedAgentIndex - 1;
+        tui.requestRender();
+      } else if (data === "\x1b[B") {
+        // down arrow
+        selectedAgentIndex =
+          selectedAgentIndex >= runningAgents.length - 1
+            ? 0
+            : selectedAgentIndex + 1;
+        tui.requestRender();
+      } else if (data === "\r" || data === "\n") {
+        const agent = runningAgents[selectedAgentIndex];
+        if (agent && onSelectAgent) {
+          onSelectAgent(agent.intentId, agent.role);
+        }
+      }
+    },
 
     invalidate(): void {},
 
@@ -349,6 +399,19 @@ export function createIntentSidebar(
       statusMessages = [...statusMessages, message].slice(-10);
       tui.invalidate();
       tui.requestRender();
+    },
+
+    updateAgents(agents: RunningAgent[]): void {
+      runningAgents = agents;
+      if (selectedAgentIndex >= agents.length) {
+        selectedAgentIndex = agents.length > 0 ? 0 : -1;
+      }
+      tui.invalidate();
+      tui.requestRender();
+    },
+
+    setOnSelectAgent(cb: ((intentId: string, role: AgentRole) => void) | null): void {
+      onSelectAgent = cb;
     },
   };
 }

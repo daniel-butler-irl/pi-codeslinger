@@ -1,6 +1,6 @@
 import { describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync } from "fs";
+import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import gtfoExt, {
@@ -87,6 +87,26 @@ function makeStubSession(replyText: string): GtfoDeps["createAgentSession"] {
     ({
       session: {
         prompt: async (_p: string) => {},
+        state: {
+          messages: [
+            { role: "assistant", content: [{ type: "text", text: replyText }] },
+          ],
+        },
+      },
+    }) as any;
+}
+
+// Build a stub that captures each prompt string passed to session.prompt().
+function makeCapturingStub(
+  replyText: string,
+  captured: { prompts: string[] },
+): GtfoDeps["createAgentSession"] {
+  return async (_opts: any) =>
+    ({
+      session: {
+        prompt: async (p: string) => {
+          captured.prompts.push(p);
+        },
         state: {
           messages: [
             { role: "assistant", content: [{ type: "text", text: replyText }] },
@@ -1579,6 +1599,192 @@ describe("GTFO extension", () => {
       assert.ok(
         statesMap.has("evict-session-33"),
         "newest session (evict-session-33) must be retained",
+      );
+    });
+  });
+
+  // ── Gap 7: generateHandover intent-aware prompt branching ──────────────
+  describe("generateHandover: intent-aware delta prompt (Gap 7)", () => {
+    // Helper: build an intent-context entry for getEntries().
+    function makeIntentEntry(intentId: string) {
+      return {
+        type: "custom",
+        customType: "intent-context",
+        data: {
+          content: `# Active Intent Context\n\n**Intent ID:** ${intentId}\n**Title:** Test Intent\n**Phase:** implementing\n`,
+        },
+      };
+    }
+
+    // Helper: write intent.md and understanding.md fixture files under tmpDir.
+    function writeIntentFixtures(
+      tmpDir: string,
+      intentId: string,
+      contract: string,
+      understanding: string,
+    ) {
+      const intentDir = join(tmpDir, ".pi", "intents", intentId);
+      mkdirSync(intentDir, { recursive: true });
+      writeFileSync(join(intentDir, "intent.md"), contract, "utf-8");
+      writeFileSync(join(intentDir, "understanding.md"), understanding, "utf-8");
+    }
+
+    it("with active intent, handover prompt embeds intent.md and understanding.md as known context and asks for delta only", async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), "gtfo-gap7-"));
+      const { pi, commands } = buildMockPi();
+
+      const intentId = "b64bf919-b25b-4b05-a386-936bedd2df6b";
+      const contractContent = "## Description\n\nImplement Gap 7 feature.\n\n## Success Criteria\n\nAll tests pass.";
+      const understandingContent = "Current understanding: nearly done with implementation.";
+
+      writeIntentFixtures(tmpDir, intentId, contractContent, understandingContent);
+
+      const captured = { prompts: [] as string[] };
+      const stub = makeCapturingStub("## In-Progress Sub-Task\n\nWorking on tests.", captured);
+      gtfoExt(pi, { createAgentSession: stub });
+
+      const ctx = {
+        ...buildBaseCtx(tmpDir),
+        cwd: tmpDir,
+        sessionManager: {
+          getEntries: () => [makeIntentEntry(intentId)],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => "gap7-session",
+        },
+        newSession: async (opts: any) => {
+          const sm = { appendCustomEntry: () => {} };
+          await opts?.setup?.(sm);
+          return { cancelled: true };
+        },
+      } as any;
+
+      const cmd = commands.get("gtfo:handover");
+      await cmd.handler("test reason", ctx);
+
+      // At least one prompt must have been sent to the model (handover generation).
+      assert.ok(captured.prompts.length >= 1, "at least one prompt must be captured");
+
+      // Find the handover prompt (the one that mentions the intent contract content).
+      const handoverPrompt = captured.prompts.find((p) =>
+        p.includes("ALREADY KNOWN") || p.includes("intent.md"),
+      );
+      assert.ok(handoverPrompt, "handover prompt must reference intent as known context");
+      assert.ok(
+        handoverPrompt!.includes(contractContent),
+        "handover prompt must embed intent contract content",
+      );
+      assert.ok(
+        handoverPrompt!.includes(understandingContent),
+        "handover prompt must embed understanding content",
+      );
+      assert.ok(
+        handoverPrompt!.includes("DELTA") || handoverPrompt!.includes("delta"),
+        "handover prompt must request delta only",
+      );
+      assert.ok(
+        !handoverPrompt!.includes("Current Task/Intent Summary"),
+        "intent-aware prompt must not use full-handover section headers",
+      );
+    });
+
+    it("without active intent, handover prompt is the standard full-handover prompt (regression)", async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), "gtfo-gap7-"));
+      const { pi, commands } = buildMockPi();
+
+      const captured = { prompts: [] as string[] };
+      const stub = makeCapturingStub(
+        "## Current Task/Intent Summary\n\nNo intent active.",
+        captured,
+      );
+      gtfoExt(pi, { createAgentSession: stub });
+
+      const ctx = {
+        ...buildBaseCtx(tmpDir),
+        cwd: tmpDir,
+        // No intent-context entry → no active intent.
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => "gap7-no-intent-session",
+        },
+        newSession: async (opts: any) => {
+          const sm = { appendCustomEntry: () => {} };
+          await opts?.setup?.(sm);
+          return { cancelled: false };
+        },
+      } as any;
+
+      const cmd = commands.get("gtfo:handover");
+      await cmd.handler("no-intent reason", ctx);
+
+      assert.ok(captured.prompts.length >= 1, "at least one prompt must be captured");
+
+      const handoverPrompt = captured.prompts.find((p) =>
+        p.includes("Current Task/Intent Summary") || p.includes("Conversation Transcript"),
+      );
+      assert.ok(handoverPrompt, "handover prompt must be found");
+      assert.ok(
+        handoverPrompt!.includes("Current Task/Intent Summary"),
+        "full handover prompt must include standard section headings",
+      );
+      assert.ok(
+        !handoverPrompt!.includes("ALREADY KNOWN"),
+        "full handover prompt must not embed intent known-context header",
+      );
+    });
+
+    it("with active intent, fallback template uses delta sections not full-handover sections", async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), "gtfo-gap7-"));
+      const { pi, commands } = buildMockPi();
+
+      const intentId = "f8013180-fcb8-4e0f-9e49-3d55b438a78a";
+      writeIntentFixtures(tmpDir, intentId, "## Description\n\nTest.", "Understanding here.");
+
+      const throwingStub: GtfoDeps["createAgentSession"] = async () => {
+        throw new Error("model unavailable");
+      };
+      gtfoExt(pi, { createAgentSession: throwingStub });
+
+      const ctx = {
+        ...buildBaseCtx(tmpDir),
+        cwd: tmpDir,
+        sessionManager: {
+          getEntries: () => [makeIntentEntry(intentId)],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => "gap7-fallback-session",
+        },
+        // With active intent the handover is saved to a file in the intent dir,
+        // not passed via appendCustomEntry. Return cancelled=true so we can read
+        // whatever file was written before cleanup.
+        newSession: async (_opts: any) => ({ cancelled: false }),
+      } as any;
+
+      const cmd = commands.get("gtfo:handover");
+      await cmd.handler("fallback test reason", ctx);
+
+      // Locate the handover file written to the intent directory.
+      const intentDir = join(tmpDir, ".pi", "intents", intentId);
+      const { readdirSync } = await import("fs");
+      const handoverFiles = existsSync(intentDir)
+        ? readdirSync(intentDir).filter((f: string) => f.startsWith("handover-"))
+        : [];
+
+      assert.ok(handoverFiles.length > 0, "fallback handover file must be written to intent dir");
+
+      const handoverContent = readFileSync(
+        join(intentDir, handoverFiles[0]),
+        "utf-8",
+      );
+      assert.ok(
+        handoverContent.includes("In-Progress Sub-Task"),
+        "intent fallback template must use delta sections",
+      );
+      assert.ok(
+        !handoverContent.includes("*(Review recent conversation for accomplishments)*"),
+        "intent fallback template must not use full-handover placeholder text",
       );
     });
   });

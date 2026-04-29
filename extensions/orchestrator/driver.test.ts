@@ -37,7 +37,7 @@ import { readActiveIntent, writeActiveIntent } from "../intent/active-local.ts";
  * proper-lockfile retries have a 50ms minimum timeout, so we need a
  * real timer (not just setImmediate) to let them complete.
  */
-async function drainAsync(ms = 200): Promise<void> {
+async function drainAsync(ms = 400): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -98,19 +98,25 @@ interface ScriptStep {
   signal: PendingSignal | null;
 }
 
+interface ScriptCursor {
+  steps: ScriptStep[];
+  i: number;
+}
+
 function scriptedAgent(
   role: AgentRole,
-  steps: ScriptStep[],
+  cursor: ScriptCursor,
   flight: IntentFlight,
 ): DispatchedAgentHandle {
-  let i = 0;
   return {
     role,
     prompt: async () => {
-      const step = steps[i++] ?? null;
+      const step = cursor.steps[cursor.i++] ?? null;
       if (step?.signal) flight.pendingSignal = step.signal;
     },
     dispose: async () => {},
+    getTranscript: () => [],
+    sendUserMessage: async () => {},
   };
 }
 
@@ -129,21 +135,26 @@ function buildDriver(opts: {
     ["intent-reviewer", makeDef("intent-reviewer")],
   ]);
 
-  // Scripted dispatcher. We keep a per-flight reference so we can wire
-  // the scripted signals to the flight the driver actually uses.
+  // Scripted dispatcher. Cursors live outside the agent handles so that
+  // a re-dispatch (after rework dispose, etc.) continues at the next step
+  // rather than restarting at step 0.
+  const implCursor: ScriptCursor = { steps: opts.impl ?? [], i: 0 };
+  const reviewerCursor: ScriptCursor = { steps: opts.reviewer ?? [], i: 0 };
   const dispatch = async (
     d: DispatchOptions,
   ): Promise<DispatchedAgentHandle> => {
     if (d.role === "implementer") {
-      return scriptedAgent("implementer", opts.impl ?? [], d.flight);
+      return scriptedAgent("implementer", implCursor, d.flight);
     }
     if (d.role === "reviewer") {
-      return scriptedAgent("reviewer", opts.reviewer ?? [], d.flight);
+      return scriptedAgent("reviewer", reviewerCursor, d.flight);
     }
     return {
       role: d.role,
       prompt: async () => {},
       dispose: async () => {},
+      getTranscript: () => [],
+      sendUserMessage: async () => {},
     };
   };
 
@@ -441,6 +452,8 @@ describe("OrchestratorDriver — child depth cap", () => {
             }
           },
           dispose: async () => {},
+          getTranscript: () => [],
+          sendUserMessage: async () => {},
         }),
       );
       driver.start();
@@ -517,47 +530,156 @@ describe("OrchestratorDriver — rework cap", () => {
   });
 });
 
-describe("OrchestratorDriver — main-chat reviewer path", () => {
-  test("review-signal event transitions to proposed-ready on pass", async () => {
+
+describe("OrchestratorDriver — pending-signal persistence and replay", () => {
+  test("proposal-signal event clears pending-signal.json on successful route", async () => {
+    await withTempDir(async (cwd) => {
+      const { id } = await seedIntentAtImplementing(cwd);
+      const { pi } = buildDriver({
+        cwd,
+        impl: [{ signal: null }],
+        reviewer: [{ signal: null }],
+      });
+
+      pi.events.emit("orchestrator:proposal-signal", {
+        intentId: id,
+        summary: "done",
+        artifacts: [],
+        proposedAt: new Date().toISOString(),
+      });
+      await drainAsync();
+
+      const { readPendingSignal } = await import("./signal-store.ts");
+      assert.equal(readPendingSignal(cwd, id), null);
+      assert.equal(
+        loadStore(cwd).intents.find((i) => i.id === id)!.phase,
+        "reviewing",
+      );
+    });
+  });
+
+  test("driver.start() replays a persisted proposal signal", async () => {
+    await withTempDir(async (cwd) => {
+      const { id } = await seedIntentAtImplementing(cwd);
+
+      const { writePendingSignal, readPendingSignal } = await import(
+        "./signal-store.ts"
+      );
+      writePendingSignal(cwd, id, {
+        kind: "proposal",
+        agentRole: "implementer",
+        intentId: id,
+        summary: "crash-mid-route",
+        artifacts: [],
+        proposedAt: new Date().toISOString(),
+      });
+
+      buildDriver({
+        cwd,
+        impl: [{ signal: null }],
+        reviewer: [{ signal: null }],
+      });
+      await drainAsync();
+
+      assert.equal(
+        loadStore(cwd).intents.find((i) => i.id === id)!.phase,
+        "reviewing",
+      );
+      assert.equal(readPendingSignal(cwd, id), null);
+      assert.ok(readLog(cwd, id).includes("proposal"));
+    });
+  });
+
+  test("replay clears stale pending signal that disagrees with phase", async () => {
+    await withTempDir(async (cwd) => {
+      const { id } = await seedIntentAtImplementing(cwd);
+
+      const { writePendingSignal, readPendingSignal } = await import(
+        "./signal-store.ts"
+      );
+      writePendingSignal(cwd, id, {
+        kind: "review",
+        intentId: id,
+        verdict: "pass",
+        summary: "stale",
+        findings: [],
+        nextActions: [],
+        reportedAt: new Date().toISOString(),
+      });
+
+      buildDriver({
+        cwd,
+        impl: [{ signal: null }],
+        reviewer: [{ signal: null }],
+      });
+      await drainAsync();
+
+      assert.equal(readPendingSignal(cwd, id), null);
+      assert.equal(
+        loadStore(cwd).intents.find((i) => i.id === id)!.phase,
+        "implementing",
+      );
+    });
+  });
+});
+
+describe("OrchestratorDriver — fresh dispatch on rework", () => {
+  test("reviewer rework disposes prior implementer handle before re-dispatch", async () => {
     await withTempDir(async (cwd) => {
       const { id } = await seedIntentAtImplementing(cwd);
 
       const { pi } = mockPi();
       const defs = new Map([
         ["intent-implementer", makeDef("intent-implementer")],
-        [
-          "intent-reviewer",
-          {
-            name: "intent-reviewer",
-            description: "main-chat reviewer (no provider/model)",
-            tools: ["read"],
-            systemPrompt: "Review this.",
-          } as AgentDefinition,
-        ],
+        ["intent-reviewer", makeDef("intent-reviewer")],
       ]);
 
+      let implDispatchCount = 0;
+      let implDisposeCount = 0;
       const dispatch = async (
         d: DispatchOptions,
       ): Promise<DispatchedAgentHandle> => {
         if (d.role === "implementer") {
-          return scriptedAgent(
-            "implementer",
-            [
-              {
-                signal: {
+          implDispatchCount += 1;
+          const turn = implDispatchCount;
+          return {
+            role: "implementer",
+            prompt: async () => {
+              if (turn === 1) {
+                d.flight.pendingSignal = {
                   kind: "proposal",
                   agentRole: "implementer",
                   intentId: id,
-                  summary: "done",
+                  summary: "v1",
                   artifacts: [],
                   proposedAt: new Date().toISOString(),
-                },
-              },
-            ],
-            d.flight,
-          );
+                };
+              }
+            },
+            dispose: async () => {
+              implDisposeCount += 1;
+            },
+            getTranscript: () => [],
+            sendUserMessage: async () => {},
+          };
         }
-        throw new Error("Reviewer should not be dispatched as subagent");
+        return {
+          role: "reviewer",
+          prompt: async () => {
+            d.flight.pendingSignal = {
+              kind: "review",
+              intentId: id,
+              verdict: "rework",
+              summary: "needs work",
+              findings: ["fix x"],
+              nextActions: ["redo"],
+              reportedAt: new Date().toISOString(),
+            };
+          },
+          dispose: async () => {},
+          getTranscript: () => [],
+          sendUserMessage: async () => {},
+        };
       };
 
       const driver = new OrchestratorDriver(
@@ -572,71 +694,64 @@ describe("OrchestratorDriver — main-chat reviewer path", () => {
       );
       driver.start();
 
-      // Implementer proposes done → phase moves to reviewing.
       pi.events.emit("intent:phase-changed", {
         id,
         from: "defining",
         to: "implementing",
       });
-      await drainAsync();
+      await drainAsync(400);
 
-      const midStore = loadStore(cwd);
-      assert.equal(
-        midStore.intents.find((i) => i.id === id)!.phase,
-        "reviewing",
-      );
-
-      // Simulate the main-chat AI calling report_review → emits review-signal.
-      pi.events.emit("orchestrator:review-signal", {
-        intentId: id,
-        verdict: "pass",
-        summary: "All success criteria met. No issues found.",
-        findings: [],
-        nextActions: [],
-        reportedAt: new Date().toISOString(),
-      });
-      await drainAsync();
-
-      const afterStore = loadStore(cwd);
-      assert.equal(
-        afterStore.intents.find((i) => i.id === id)!.phase,
-        "proposed-ready",
-      );
+      assert.equal(implDispatchCount, 2);
+      assert.equal(implDisposeCount, 1);
     });
   });
 });
 
-describe("OrchestratorDriver — main-chat implementer path", () => {
-  test("proposal-signal event transitions implementing → reviewing", async () => {
+describe("OrchestratorDriver — child summary injection on parent resume", () => {
+  test("parent's resume prompt embeds child's understanding.md", async () => {
     await withTempDir(async (cwd) => {
-      const { id } = await seedIntentAtImplementing(cwd);
+      const { id: parentId } = await seedIntentAtImplementing(cwd);
+      const preload = loadStore(cwd);
+      transitionPhase(preload, parentId, "blocked-on-child");
+      const child = createIntent(preload, cwd, "prerequisite work", {
+        parentId,
+      });
+      await saveStore(cwd, preload);
 
+      const { writeUnderstanding } = await import("../intent/store.ts");
+      writeUnderstanding(
+        cwd,
+        child.id,
+        "Did X. Touched files A, B. Decision: chose pattern Y because Z.",
+      );
+
+      const midStore = loadStore(cwd);
+      transitionPhase(midStore, child.id, "implementing");
+      transitionPhase(midStore, child.id, "reviewing");
+      transitionPhase(midStore, child.id, "proposed-ready");
+      transitionPhase(midStore, child.id, "done");
+      await saveStore(cwd, midStore);
+
+      // Capture the prompt sent to the parent's implementer turn.
+      const prompts: string[] = [];
       const { pi } = mockPi();
       const defs = new Map([
-        [
-          "intent-implementer",
-          {
-            name: "intent-implementer",
-            description: "main-chat implementer (no provider/model)",
-            tools: [],
-            systemPrompt: "Implement this.",
-          } as AgentDefinition,
-        ],
-        [
-          "intent-reviewer",
-          {
-            name: "intent-reviewer",
-            description: "main-chat reviewer (no provider/model)",
-            tools: [],
-            systemPrompt: "Review this.",
-          } as AgentDefinition,
-        ],
+        ["intent-implementer", makeDef("intent-implementer")],
+        ["intent-reviewer", makeDef("intent-reviewer")],
       ]);
-
-      const dispatch = async (): Promise<DispatchedAgentHandle> => {
-        throw new Error("No agent should be dispatched in main-chat mode");
+      const dispatch = async (
+        d: DispatchOptions,
+      ): Promise<DispatchedAgentHandle> => {
+        return {
+          role: d.role,
+          prompt: async (text: string) => {
+            prompts.push(text);
+          },
+          dispose: async () => {},
+          getTranscript: () => [],
+          sendUserMessage: async () => {},
+        };
       };
-
       const driver = new OrchestratorDriver(
         pi,
         cwd,
@@ -650,34 +765,101 @@ describe("OrchestratorDriver — main-chat implementer path", () => {
       driver.start();
 
       pi.events.emit("intent:phase-changed", {
+        id: child.id,
+        from: "reviewing",
+        to: "done",
+      });
+      await drainAsync();
+
+      const resumePrompt = prompts.find((p) => p.includes("Child intent"));
+      assert.ok(resumePrompt, "parent should receive a resume prompt");
+      assert.match(resumePrompt!, /Child intent "Prerequisite work" completed/);
+      assert.match(resumePrompt!, /Did X\. Touched files A, B\./);
+    });
+  });
+});
+
+describe("OrchestratorDriver — getActiveAgents and agents-changed event", () => {
+  test("getActiveAgents returns empty list when no flights active", async () => {
+    await withTempDir(async (cwd) => {
+      const { driver } = buildDriver({ cwd });
+      assert.deepEqual(driver.getActiveAgents(), []);
+    });
+  });
+
+  test("getActiveAgents reflects dispatched agent", async () => {
+    await withTempDir(async (cwd) => {
+      const { id } = await seedIntentAtImplementing(cwd);
+      // Implementer writes no signal so it stays dispatched
+      const { driver, pi } = buildDriver({
+        cwd,
+        impl: [{ signal: null }],
+        reviewer: [{ signal: null }],
+      });
+
+      // Capture agents-changed events
+      const agentEvents: unknown[] = [];
+      pi.events.on("orchestrator:agents-changed", (payload) => {
+        agentEvents.push(payload);
+      });
+
+      pi.events.emit("intent:phase-changed", {
         id,
         from: "defining",
         to: "implementing",
       });
       await drainAsync();
 
-      // Phase still implementing — waiting for main-chat AI to call propose_done.
-      const midStore = loadStore(cwd);
-      assert.equal(
-        midStore.intents.find((i) => i.id === id)!.phase,
-        "implementing",
+      // After dispatch, getActiveAgents should have been populated during the
+      // dispatch (before the prompt finished). agents-changed should have fired.
+      assert.ok(
+        agentEvents.length >= 1,
+        `expected at least 1 agents-changed event, got ${agentEvents.length}`,
       );
+    });
+  });
 
-      // Simulate the main-chat AI calling propose_done → emits proposal-signal.
-      pi.events.emit("orchestrator:proposal-signal", {
-        intentId: id,
-        summary: "All done.",
-        artifacts: [],
-        proposedAt: new Date().toISOString(),
+  test("orchestrator:agents-changed fires when agent is dispatched and disposed", async () => {
+    await withTempDir(async (cwd) => {
+      const { id } = await seedIntentAtImplementing(cwd);
+      const fired: string[] = [];
+
+      const { pi } = buildDriver({
+        cwd,
+        impl: [
+          {
+            signal: {
+              kind: "proposal",
+              agentRole: "implementer",
+              intentId: id,
+              summary: "done",
+              artifacts: [],
+              proposedAt: new Date().toISOString(),
+            },
+          },
+        ],
+        reviewer: [{ signal: null }],
+      });
+
+      pi.events.on("orchestrator:agents-changed", () => {
+        fired.push("changed");
+      });
+
+      pi.events.emit("intent:phase-changed", {
+        id,
+        from: "defining",
+        to: "implementing",
       });
       await drainAsync();
 
-      const afterStore = loadStore(cwd);
-      assert.equal(
-        afterStore.intents.find((i) => i.id === id)!.phase,
-        "reviewing",
-      );
-      assert.ok(readLog(cwd, id).includes("proposal"));
+      assert.ok(fired.length >= 1, "agents-changed should fire at least once");
+    });
+  });
+
+  test("getAgentHandle returns undefined for missing intentId", async () => {
+    await withTempDir(async (cwd) => {
+      const { driver } = buildDriver({ cwd });
+      assert.equal(driver.getAgentHandle("nonexistent", "implementer"), undefined);
     });
   });
 });

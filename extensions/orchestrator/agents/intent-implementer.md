@@ -1,6 +1,8 @@
 ---
 name: intent-implementer
 description: Implements code changes against a locked intent contract. Never modifies the contract. Appends discoveries to the intent log. Uses the implementing-against-intent skill and terse skill.
+provider: anthropic
+model: claude-sonnet-4-6
 tools: read, grep, find, ls, bash, edit, write
 ---
 
