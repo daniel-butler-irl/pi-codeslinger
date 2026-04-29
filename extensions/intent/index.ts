@@ -21,7 +21,7 @@ import {
   type CreatedWorktree,
 } from "./worktree-manager.js";
 import { squashMergeWorktree, mergeStatus } from "./done-flow.js";
-import { mainRepoRoot } from "./paths.js";
+import { mainRepoRoot, mainIntentsJsonPath } from "./paths.js";
 import {
   loadStore,
   saveStore,
@@ -1079,15 +1079,19 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("intent", {
-    description: "Create, switch, edit, lock, or delete intents",
-    handler: async (_args, ctx) => {
-      // Check if we're in an interactive session
+    description: "Manage intents. Subcommands: unlock (clear a stale lock).",
+    handler: async (args, ctx) => {
+      if (args.trim() === "unlock") {
+        const { forceUnlock } = await import("./lock.js");
+        const lockPath = mainIntentsJsonPath(ctx.cwd);
+        forceUnlock(lockPath);
+        ctx.ui.notify(`Cleared lock on ${lockPath}`, "info");
+        return;
+      }
       if (!ctx.hasUI) {
         ctx.ui.notify("/intent requires interactive mode", "error");
         return;
       }
-
-      // Always show the overlay - it has all functionality built in
       await showIntentOverlay(ctx);
       refreshPanel();
     },
