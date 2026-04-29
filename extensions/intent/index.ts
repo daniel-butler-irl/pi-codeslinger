@@ -12,6 +12,13 @@ import { resolve, normalize, join } from "path";
 import { rmSync } from "node:fs";
 import { validateIntentForLock } from "./validate.js";
 import {
+  createWorktree,
+  worktreePath,
+  branchName,
+  type CreatedWorktree,
+} from "./worktree-manager.js";
+import { mainRepoRoot } from "./paths.js";
+import {
   loadStore,
   saveStore,
   createIntent,
@@ -29,6 +36,7 @@ import {
   readReviewResult,
   type IntentStore,
   type IntentPhase,
+  type Intent,
 } from "./store.js";
 import { readActiveIntent, writeActiveIntent } from "./active-local.js";
 import { createIntentSidebar } from "./panel.js";
@@ -1083,6 +1091,35 @@ export default function (pi: ExtensionAPI) {
 
   // ── Command handlers ────────────────────────────────────────────────────
 
+  async function gateAndCreateWorktree(
+    ctx: ExtensionCommandContext | ExtensionContext,
+    intent: Intent,
+  ): Promise<CreatedWorktree | null> {
+    // Skip the gate if a worktree already exists (re-entry, rework after review).
+    if (intent.worktreePath && intent.worktreeBranch) {
+      return { path: intent.worktreePath, branch: intent.worktreeBranch };
+    }
+    const proposedPath = worktreePath(mainRepoRoot(ctx.cwd), intent.title, intent.id);
+    const proposedBranch = branchName(intent.title, intent.id);
+    const proceed = await ctx.ui.confirm(
+      "Ready to start implementation?",
+      `This will create a worktree at ${proposedPath} on branch ${proposedBranch} and start the implementer.`,
+    );
+    if (!proceed) {
+      ctx.ui.notify("Implementation not started.", "info");
+      return null;
+    }
+    try {
+      const created = createWorktree(ctx.cwd, intent.title, intent.id);
+      intent.worktreeBranch = created.branch;
+      intent.worktreePath = created.path;
+      return created;
+    } catch (err) {
+      ctx.ui.notify(`Worktree creation failed: ${(err as Error).message}`, "warning");
+      return null;
+    }
+  }
+
   async function handleEdit(
     ctx: ExtensionCommandContext | ExtensionContext,
     intentId?: string,
@@ -1130,6 +1167,9 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
+    const created = await gateAndCreateWorktree(ctx, intent);
+    if (!created) return; // user declined or worktree creation failed
+
     const from: IntentPhase = intent.phase;
     const isActiveIntent = readActiveIntent(ctx.cwd) === intent.id;
 
@@ -1140,12 +1180,13 @@ export default function (pi: ExtensionAPI) {
       from,
       to: "implementing",
     });
-    ctx.ui.notify(`Intent locked: "${intent.title}"`, "info");
+    ctx.ui.notify(`Worktree created: ${created.path}`, "info");
 
-    // Start fresh session if this is the active intent (implementer agent will take over)
-    // Note: No post-switch work needed - function returns immediately after.
-    // If we needed to do work after the switch, we'd use withSession callback.
     if (isActiveIntent && "newSession" in ctx) {
+      // pi-coding-agent's newSession() does not accept a cwd option, so we
+      // change the process cwd before starting the fresh session. The new
+      // session_start handler will pick up ctx.cwd from the new process cwd.
+      process.chdir(created.path);
       await ctx.newSession();
     }
   }
@@ -1162,29 +1203,25 @@ export default function (pi: ExtensionAPI) {
     const isActiveIntent = readActiveIntent(ctx.cwd) === intentId;
 
     try {
-      {
-        // Normal single transition
+      if (toPhase === "implementing") {
+        const created = await gateAndCreateWorktree(ctx, intent);
+        if (!created) return;
         transitionPhase(store, intentId, toPhase);
         await persist(ctx.cwd);
-        pi.events.emit("intent:phase-changed", {
-          id: intentId,
-          from,
-          to: toPhase,
-        });
+        pi.events.emit("intent:phase-changed", { id: intentId, from, to: toPhase });
         ctx.ui.notify(`Intent "${intent.title}" moved to ${toPhase}`, "info");
-
-        // Start fresh session when transitioning to implementing so the
-        // implementer subagent gets a clean context. Review runs in the
-        // current session via sendUserMessage, so no newSession there.
-        // Note: No post-switch work needed - function returns immediately after.
-        // If we needed to do work after the switch, we'd use withSession callback.
-        if (
-          isActiveIntent &&
-          toPhase === "implementing" &&
-          "newSession" in ctx
-        ) {
+        if (isActiveIntent && "newSession" in ctx) {
+          // pi-coding-agent's newSession() does not accept a cwd option, so we
+          // change the process cwd before starting the fresh session. The new
+          // session_start handler will pick up ctx.cwd from the new process cwd.
+          process.chdir(created.path);
           await ctx.newSession();
         }
+      } else {
+        transitionPhase(store, intentId, toPhase);
+        await persist(ctx.cwd);
+        pi.events.emit("intent:phase-changed", { id: intentId, from, to: toPhase });
+        ctx.ui.notify(`Intent "${intent.title}" moved to ${toPhase}`, "info");
       }
     } catch (err) {
       ctx.ui.notify((err as Error).message, "warning");
