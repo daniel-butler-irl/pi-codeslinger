@@ -16,8 +16,11 @@ import {
   createWorktree,
   worktreePath,
   branchName,
+  isDirty,
+  removeWorktree,
   type CreatedWorktree,
 } from "./worktree-manager.js";
+import { squashMergeWorktree, mergeStatus } from "./done-flow.js";
 import { mainRepoRoot } from "./paths.js";
 import {
   loadStore,
@@ -1203,6 +1206,49 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  async function handleDoneTransition(
+    ctx: ExtensionCommandContext | ExtensionContext,
+    intent: Intent,
+  ): Promise<"done" | "blocked"> {
+    if (intent.worktreePath && intent.worktreeBranch) {
+      if (isDirty(intent.worktreePath)) {
+        ctx.ui.notify(
+          `Cannot mark done: worktree has uncommitted changes at ${intent.worktreePath}. Commit or stash first.`,
+          "warning",
+        );
+        return "blocked";
+      }
+      const result = squashMergeWorktree(
+        ctx.cwd,
+        intent.worktreeBranch,
+        `feat(${intent.id.slice(0, 8)}): ${intent.title}`,
+      );
+      if (result.kind !== "merged") {
+        ctx.ui.notify(mergeStatus(result), "warning");
+        return "blocked";
+      }
+      ctx.ui.notify(mergeStatus(result), "info");
+
+      const remove = await ctx.ui.confirm(
+        "Delete worktree?",
+        `Worktree at ${intent.worktreePath} (branch ${intent.worktreeBranch}) is no longer needed. Delete it?`,
+      );
+      if (remove) {
+        if (ctx.cwd.startsWith(intent.worktreePath)) {
+          ctx.ui.notify(
+            `Note: current shell is inside the worktree. cd to main repo manually after deletion.`,
+            "info",
+          );
+        }
+        removeWorktree(ctx.cwd, intent.worktreePath, intent.worktreeBranch);
+        intent.worktreePath = undefined;
+        intent.worktreeBranch = undefined;
+        ctx.ui.notify("Worktree deleted.", "info");
+      }
+    }
+    return "done";
+  }
+
   async function handleTransition(
     ctx: ExtensionCommandContext | ExtensionContext,
     intentId: string,
@@ -1215,7 +1261,15 @@ export default function (pi: ExtensionAPI) {
     const isActiveIntent = readActiveIntent(ctx.cwd) === intentId;
 
     try {
-      if (toPhase === "implementing") {
+      if (toPhase === "done") {
+        const outcome = await handleDoneTransition(ctx, intent);
+        if (outcome === "blocked") return;
+        transitionPhase(store, intentId, toPhase);
+        await persist(ctx.cwd);
+        pi.events.emit("intent:phase-changed", { id: intentId, from, to: toPhase });
+        ctx.ui.notify(`Intent "${intent.title}" moved to ${toPhase}`, "info");
+        return;
+      } else if (toPhase === "implementing") {
         const created = await gateAndCreateWorktree(ctx, intent);
         if (!created) return;
         transitionPhase(store, intentId, toPhase);
@@ -1297,6 +1351,10 @@ export default function (pi: ExtensionAPI) {
       recursive: true,
       force: true,
     });
+    // Clean up worktree if the intent has one.
+    if (intent.worktreePath && intent.worktreeBranch) {
+      removeWorktree(ctx.cwd, intent.worktreePath, intent.worktreeBranch);
+    }
     // Clear active state if this was the active intent.
     if (readActiveIntent(ctx.cwd) === intent.id) {
       writeActiveIntent(ctx.cwd, null);
