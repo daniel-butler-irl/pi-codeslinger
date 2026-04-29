@@ -1,8 +1,10 @@
 /**
  * Intent store — file-based persistence for the intent bar.
  *
- * Metadata lives in <cwd>/.pi/intents.json.
- * Rich content (description, goals, tasks, etc.) lives in <cwd>/.pi/intents/<id>.md.
+ * Metadata lives in <main-repo>/.pi/intents.json (shared across all worktrees).
+ * Rich content (description, goals, tasks, etc.) lives in <main-repo>/.pi/intents/<id>/intent.md.
+ * Audit-trail files (log, understanding, verification, review-result) live in
+ * the feature worktree's own <cwd>/.pi/intents/<id>/.
  *
  * Separating the two lets the .md file grow freely without touching the metadata
  * index, and lets the LLM read/edit intent content as a plain file.
@@ -19,6 +21,14 @@ import {
   appendFileSync,
 } from "fs";
 import { join } from "path";
+import {
+  mainPiDir,
+  mainIntentsJsonPath,
+  mainIntentDir,
+  mainIntentContractPath,
+} from "./paths.ts";
+import { withExclusiveLock } from "./lock.ts";
+import { readActiveIntent } from "./active-local.ts";
 
 /**
  * The lifecycle phase an intent is currently in.
@@ -51,11 +61,11 @@ export interface Intent {
 /**
  * Top-level store.
  *
- * activeIntentId points to the intent currently being worked on. In a tree
- * with child intents, that is the deepest node being acted on — not the root.
+ * Active intent tracking is now per-worktree via active-local.ts
+ * (readActiveIntent / writeActiveIntent). This store holds only
+ * the shared metadata for all intents.
  */
 export interface IntentStore {
-  activeIntentId: string | null;
   intents: Intent[];
 }
 
@@ -80,49 +90,55 @@ function migrateIntent(
 }
 
 function piDir(cwd: string): string {
-  return join(cwd, ".pi");
+  return mainPiDir(cwd);
 }
 
 function storePath(cwd: string): string {
-  return join(piDir(cwd), "intents.json");
+  return mainIntentsJsonPath(cwd);
 }
 
 /**
- * Directory that holds all files for a single intent.
+ * Directory that holds the shared contract files for a single intent.
+ * Resolves to the main repo's .pi/intents/<id>/ so that the contract
+ * file is shared across all worktrees.
  *
- * Layout under <cwd>/.pi/intents/<id>/:
+ * Layout under <main-repo>/.pi/intents/<id>/:
  *   intent.md          — the contract (locked outside the defining phase)
- *   understanding.md   — session's current understanding, next steps, questions
- *   log.md             — append-only journal (discoveries, decisions, findings)
- *   verification.json  — cached results of the last verification run
+ *
+ * Audit-trail files (log, understanding, verification, review-result) are
+ * per-worktree and use local path helpers below.
  */
 export function intentDir(cwd: string, id: string): string {
-  return join(piDir(cwd), "intents", id);
+  return mainIntentDir(cwd, id);
 }
 
 /**
  * Path to the intent contract file.
  *
- * Returns `<id>/intent.md` under the intent directory.
+ * Returns `<id>/intent.md` under the main repo intent directory.
  */
 export function intentContractPath(cwd: string, id: string): string {
-  return join(intentDir(cwd, id), "intent.md");
+  return mainIntentContractPath(cwd, id);
 }
 
+/**
+ * Audit-trail files live in the feature worktree's own .pi/intents/<id>/.
+ * These are per-worktree and do NOT route through the main repo.
+ */
 export function intentLogPath(cwd: string, id: string): string {
-  return join(intentDir(cwd, id), "log.md");
+  return join(cwd, ".pi", "intents", id, "log.md");
 }
 
 export function intentUnderstandingPath(cwd: string, id: string): string {
-  return join(intentDir(cwd, id), "understanding.md");
+  return join(cwd, ".pi", "intents", id, "understanding.md");
 }
 
 export function intentVerificationPath(cwd: string, id: string): string {
-  return join(intentDir(cwd, id), "verification.json");
+  return join(cwd, ".pi", "intents", id, "verification.json");
 }
 
 export function reviewResultPath(cwd: string, id: string): string {
-  return join(intentDir(cwd, id), "review-result.json");
+  return join(cwd, ".pi", "intents", id, "review-result.json");
 }
 
 /**
@@ -149,19 +165,17 @@ export function loadStore(cwd: string): IntentStore {
   try {
     const raw = readFileSync(storePath(cwd), "utf-8");
     const parsed = JSON.parse(raw) as {
-      activeIntentId: string | null;
-      intents: Array<
+      intents?: Array<
         Partial<Intent> & { id: string; title: string; createdAt: number }
       >;
     };
     const store: IntentStore = {
-      activeIntentId: parsed.activeIntentId ?? null,
       intents: (parsed.intents ?? []).map(migrateIntent),
     };
     migrateLegacyFileLayout(cwd, store);
     return store;
   } catch {
-    return { activeIntentId: null, intents: [] };
+    return { intents: [] };
   }
 }
 
@@ -192,13 +206,19 @@ function migrateLegacyFileLayout(cwd: string, store: IntentStore): void {
 }
 
 /**
- * Save the intent store metadata atomically.
+ * Save the intent store metadata atomically, with an exclusive lock.
+ * Creates the file if it doesn't exist (proper-lockfile requires the
+ * target file to exist before locking).
  */
-export function saveStore(cwd: string, store: IntentStore): void {
+export async function saveStore(cwd: string, store: IntentStore): Promise<void> {
   mkdirSync(piDir(cwd), { recursive: true });
-  const tmp = storePath(cwd) + ".tmp";
-  writeFileSync(tmp, JSON.stringify(store, null, 2), "utf-8");
-  renameSync(tmp, storePath(cwd));
+  const file = storePath(cwd);
+  if (!existsSync(file)) writeFileSync(file, JSON.stringify({ intents: [] }, null, 2));
+  await withExclusiveLock(file, async () => {
+    const tmp = file + ".tmp";
+    writeFileSync(tmp, JSON.stringify(store, null, 2), "utf-8");
+    renameSync(tmp, file);
+  });
 }
 
 /**
@@ -344,11 +364,13 @@ export function readReviewResult(cwd: string, id: string): ReviewResult | null {
 }
 
 /**
- * Return the currently active intent, or undefined if none is set.
+ * Return the currently active intent for the given worktree, or undefined if none is set.
+ * Reads the active intent id from per-worktree storage via active-local.ts.
  */
-export function getActiveIntent(store: IntentStore): Intent | undefined {
-  if (!store.activeIntentId) return undefined;
-  return store.intents.find((i) => i.id === store.activeIntentId);
+export function getActiveIntent(store: IntentStore, cwd: string): Intent | undefined {
+  const id = readActiveIntent(cwd);
+  if (!id) return undefined;
+  return store.intents.find((i) => i.id === id);
 }
 
 /**
@@ -401,7 +423,6 @@ export function createIntent(
     reworkCount: 0,
   };
   store.intents.push(intent);
-  store.activeIntentId = id;
   saveIntentContent(cwd, id, intentTemplate(description));
   return intent;
 }
@@ -437,9 +458,6 @@ export function deleteIntent(
     /* legacy file may not exist */
   }
   store.intents = store.intents.filter((i) => i.id !== id);
-  if (store.activeIntentId === id) {
-    store.activeIntentId = store.intents.at(-1)?.id ?? null;
-  }
 }
 
 // ── Phase transitions ───────────────────────────────────────────────────────
@@ -524,11 +542,13 @@ export function getRoot(store: IntentStore, id: string): Intent | undefined {
 /**
  * Path from the root to the active intent, inclusive.
  * Empty array if there is no active intent.
+ * Reads the active intent id from per-worktree storage via active-local.ts.
  */
-export function getActivePath(store: IntentStore): Intent[] {
-  if (!store.activeIntentId) return [];
+export function getActivePath(store: IntentStore, cwd: string): Intent[] {
+  const activeId = readActiveIntent(cwd);
+  if (!activeId) return [];
   const path: Intent[] = [];
-  let cursor = store.intents.find((i) => i.id === store.activeIntentId);
+  let cursor = store.intents.find((i) => i.id === activeId);
   while (cursor) {
     path.unshift(cursor);
     if (cursor.parentId === null) break;

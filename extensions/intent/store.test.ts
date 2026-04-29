@@ -14,6 +14,7 @@ import {
   mkdirSync,
   writeFileSync,
 } from "fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -46,12 +47,29 @@ import {
   type Intent,
   type IntentPhase,
 } from "./store.ts";
+import { readActiveIntent, writeActiveIntent } from "./active-local.ts";
 import { existsSync } from "fs";
 
-function withTempDir(fn: (cwd: string) => void) {
+async function withTempDir(fn: (cwd: string) => void | Promise<void>) {
   const dir = mkdtempSync(join(tmpdir(), "pi-intent-test-"));
   try {
-    fn(dir);
+    await fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Like withTempDir but initialises a git repo so writeActiveIntent works. */
+async function withGitTempDir(fn: (cwd: string) => void | Promise<void>) {
+  const dir = mkdtempSync(join(tmpdir(), "pi-intent-git-test-"));
+  try {
+    execFileSync("git", ["init", "-b", "main"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+    writeFileSync(join(dir, "README"), "x");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+    await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -77,29 +95,26 @@ describe("deriveTitle", () => {
 });
 
 describe("loadStore", () => {
-  test("returns empty store when file does not exist", () => {
-    withTempDir((cwd) => {
+  test("returns empty store when file does not exist", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
-      assert.equal(store.activeIntentId, null);
       assert.deepEqual(store.intents, []);
     });
   });
 
-  test("returns empty store when file is corrupt", () => {
-    withTempDir((cwd) => {
-      import("fs").then(({ mkdirSync, writeFileSync }) => {
-        mkdirSync(join(cwd, ".pi"), { recursive: true });
-        writeFileSync(join(cwd, ".pi", "intents.json"), "not json");
-      });
+  test("returns empty store when file is corrupt", async () => {
+    await withTempDir((cwd) => {
+      mkdirSync(join(cwd, ".pi"), { recursive: true });
+      writeFileSync(join(cwd, ".pi", "intents.json"), "not json");
       const store = loadStore(cwd);
-      assert.equal(store.activeIntentId, null);
+      assert.deepEqual(store.intents, []);
     });
   });
 });
 
 describe("saveStore / loadStore round-trip", () => {
-  test("persists and restores a modern intent", () => {
-    withTempDir((cwd) => {
+  test("persists and restores a modern intent", async () => {
+    await withTempDir(async (cwd) => {
       const intent: Intent = {
         id: "abc",
         title: "Test",
@@ -109,8 +124,8 @@ describe("saveStore / loadStore round-trip", () => {
         phase: "implementing",
         reworkCount: 3,
       };
-      const original = { activeIntentId: "abc", intents: [intent] };
-      saveStore(cwd, original);
+      const original = { intents: [intent] };
+      await saveStore(cwd, original);
       const loaded = loadStore(cwd);
       assert.deepEqual(loaded, original);
     });
@@ -118,14 +133,13 @@ describe("saveStore / loadStore round-trip", () => {
 });
 
 describe("loadStore migration", () => {
-  test("fills defaults for legacy intents missing new fields", () => {
-    withTempDir((cwd) => {
+  test("fills defaults for legacy intents missing new fields", async () => {
+    await withTempDir((cwd) => {
       // Simulate an on-disk store written by an older version of the code.
       mkdirSync(join(cwd, ".pi"), { recursive: true });
       writeFileSync(
         join(cwd, ".pi", "intents.json"),
         JSON.stringify({
-          activeIntentId: "legacy-1",
           intents: [{ id: "legacy-1", title: "Old intent", createdAt: 1000 }],
         }),
       );
@@ -142,18 +156,27 @@ describe("loadStore migration", () => {
 });
 
 describe("createIntent", () => {
-  test("adds intent and sets it as active", () => {
-    withTempDir((cwd) => {
+  test("adds intent to the store", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "fix the login bug");
-      assert.equal(store.activeIntentId, intent.id);
       assert.equal(store.intents.length, 1);
       assert.equal(store.intents[0].title, "Fix the login bug");
+      assert.equal(store.intents[0].id, intent.id);
     });
   });
 
-  test("writes structured template to .md file", () => {
-    withTempDir((cwd) => {
+  test("caller can set intent as active via writeActiveIntent", async () => {
+    await withGitTempDir((cwd) => {
+      const store = loadStore(cwd);
+      const intent = createIntent(store, cwd, "fix the login bug");
+      writeActiveIntent(cwd, intent.id);
+      assert.equal(readActiveIntent(cwd), intent.id);
+    });
+  });
+
+  test("writes structured template to .md file", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "my description");
       const content = loadIntentContent(cwd, intent.id);
@@ -163,18 +186,17 @@ describe("createIntent", () => {
     });
   });
 
-  test("switches active intent when second one is created", () => {
-    withTempDir((cwd) => {
+  test("multiple intents can be created independently", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       createIntent(store, cwd, "first intent");
-      const second = createIntent(store, cwd, "second intent");
-      assert.equal(store.activeIntentId, second.id);
+      createIntent(store, cwd, "second intent");
       assert.equal(store.intents.length, 2);
     });
   });
 
-  test("new intents start in the defining phase with no parent", () => {
-    withTempDir((cwd) => {
+  test("new intents start in the defining phase with no parent", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "top-level work");
       assert.equal(intent.phase, "defining");
@@ -184,8 +206,8 @@ describe("createIntent", () => {
     });
   });
 
-  test("accepts a parentId to create a child intent", () => {
-    withTempDir((cwd) => {
+  test("accepts a parentId to create a child intent", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const parent = createIntent(store, cwd, "parent work");
       const child = createIntent(store, cwd, "prereq child", {
@@ -197,8 +219,8 @@ describe("createIntent", () => {
 });
 
 describe("deleteIntent", () => {
-  test("removes intent from store", () => {
-    withTempDir((cwd) => {
+  test("removes intent from store", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "to delete");
       deleteIntent(store, cwd, intent.id);
@@ -206,27 +228,24 @@ describe("deleteIntent", () => {
     });
   });
 
-  test("clears activeIntentId when active intent is deleted", () => {
-    withTempDir((cwd) => {
+  test("does not manage active state — caller must clean up", async () => {
+    await withGitTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "to delete");
+      writeActiveIntent(cwd, intent.id);
       deleteIntent(store, cwd, intent.id);
-      assert.equal(store.activeIntentId, null);
+      // deleteIntent does not clear active state; caller is responsible
+      assert.equal(store.intents.length, 0);
+      // active file still points to the deleted id — caller must clear it
+      assert.equal(readActiveIntent(cwd), intent.id);
+      // caller cleans up:
+      writeActiveIntent(cwd, null);
+      assert.equal(readActiveIntent(cwd), null);
     });
   });
 
-  test("falls back to most recent remaining intent", () => {
-    withTempDir((cwd) => {
-      const store = loadStore(cwd);
-      const first = createIntent(store, cwd, "first");
-      const second = createIntent(store, cwd, "second");
-      deleteIntent(store, cwd, second.id);
-      assert.equal(store.activeIntentId, first.id);
-    });
-  });
-
-  test("removes the .md file", () => {
-    withTempDir((cwd) => {
+  test("removes the .md file", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "to delete");
       const path = intentFilePath(cwd, intent.id);
@@ -235,8 +254,8 @@ describe("deleteIntent", () => {
     });
   });
 
-  test("refuses to delete an intent that has children", () => {
-    withTempDir((cwd) => {
+  test("refuses to delete an intent that has children", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const parent = createIntent(store, cwd, "parent");
       createIntent(store, cwd, "child", { parentId: parent.id });
@@ -246,8 +265,8 @@ describe("deleteIntent", () => {
 });
 
 describe("tree traversal", () => {
-  test("getChildren returns direct children only", () => {
-    withTempDir((cwd) => {
+  test("getChildren returns direct children only", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const root = createIntent(store, cwd, "root");
       const childA = createIntent(store, cwd, "A", { parentId: root.id });
@@ -260,8 +279,8 @@ describe("tree traversal", () => {
     });
   });
 
-  test("getParent returns the parent intent", () => {
-    withTempDir((cwd) => {
+  test("getParent returns the parent intent", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const root = createIntent(store, cwd, "root");
       const child = createIntent(store, cwd, "child", { parentId: root.id });
@@ -269,16 +288,16 @@ describe("tree traversal", () => {
     });
   });
 
-  test("getParent returns undefined for top-level intents", () => {
-    withTempDir((cwd) => {
+  test("getParent returns undefined for top-level intents", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const root = createIntent(store, cwd, "root");
       assert.equal(getParent(store, root.id), undefined);
     });
   });
 
-  test("getRoot walks up to the top-level ancestor", () => {
-    withTempDir((cwd) => {
+  test("getRoot walks up to the top-level ancestor", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const root = createIntent(store, cwd, "root");
       const mid = createIntent(store, cwd, "mid", { parentId: root.id });
@@ -287,24 +306,25 @@ describe("tree traversal", () => {
     });
   });
 
-  test("getRoot returns the intent itself if it is top-level", () => {
-    withTempDir((cwd) => {
+  test("getRoot returns the intent itself if it is top-level", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const root = createIntent(store, cwd, "root");
       assert.equal(getRoot(store, root.id)?.id, root.id);
     });
   });
 
-  test("getActivePath returns root→active order", () => {
-    withTempDir((cwd) => {
+  test("getActivePath returns root→active order", async () => {
+    await withGitTempDir((cwd) => {
       const store = loadStore(cwd);
       const root = createIntent(store, cwd, "root");
       const mid = createIntent(store, cwd, "mid", { parentId: root.id });
       const leaf = createIntent(store, cwd, "leaf", { parentId: mid.id });
-      // createIntent sets activeIntentId to the newest, so leaf is active.
-      assert.equal(store.activeIntentId, leaf.id);
+      // Explicitly set leaf as active via per-worktree storage.
+      writeActiveIntent(cwd, leaf.id);
+      assert.equal(readActiveIntent(cwd), leaf.id);
 
-      const path = getActivePath(store);
+      const path = getActivePath(store, cwd);
       assert.deepEqual(
         path.map((i) => i.id),
         [root.id, mid.id, leaf.id],
@@ -312,9 +332,11 @@ describe("tree traversal", () => {
     });
   });
 
-  test("getActivePath is empty when no intent is active", () => {
-    const store = { activeIntentId: null, intents: [] };
-    assert.deepEqual(getActivePath(store), []);
+  test("getActivePath is empty when no intent is active", async () => {
+    await withTempDir((cwd) => {
+      const store = { intents: [] };
+      assert.deepEqual(getActivePath(store, cwd), []);
+    });
   });
 });
 
@@ -359,7 +381,7 @@ describe("phase transitions", () => {
   }
 
   test("transitionPhase mutates phase and bumps updatedAt", async () => {
-    withTempDir((cwd) => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "work");
       const originalUpdated = intent.updatedAt;
@@ -374,8 +396,8 @@ describe("phase transitions", () => {
     });
   });
 
-  test("transitionPhase throws on illegal transition", () => {
-    withTempDir((cwd) => {
+  test("transitionPhase throws on illegal transition", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "work");
       assert.throws(
@@ -386,8 +408,7 @@ describe("phase transitions", () => {
   });
 
   test("transitionPhase throws on unknown id", () => {
-    const store: { activeIntentId: null; intents: Intent[] } = {
-      activeIntentId: null,
+    const store: { intents: Intent[] } = {
       intents: [],
     };
     assert.throws(
@@ -398,8 +419,8 @@ describe("phase transitions", () => {
 });
 
 describe("file layout", () => {
-  test("createIntent writes into a per-intent directory", () => {
-    withTempDir((cwd) => {
+  test("createIntent writes into a per-intent directory", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "layout test");
       assert.ok(existsSync(intentDir(cwd, intent.id)));
@@ -407,23 +428,21 @@ describe("file layout", () => {
     });
   });
 
-  test("intentFilePath aliases intentContractPath", () => {
-    withTempDir((cwd) => {
+  test("intentFilePath aliases intentContractPath", async () => {
+    await withTempDir((cwd) => {
       assert.equal(intentFilePath(cwd, "abc"), intentContractPath(cwd, "abc"));
     });
   });
 
   test("loadStore migrates legacy <id>.md files into <id>/intent.md", async () => {
-    withTempDir(async (cwd) => {
-      const { mkdirSync: mk, writeFileSync: wf } = await import("fs");
+    await withTempDir((cwd) => {
       const id = "legacy-id";
       // Write a legacy single-file intent.
-      mk(join(cwd, ".pi", "intents"), { recursive: true });
-      wf(join(cwd, ".pi", "intents", `${id}.md`), "# Legacy body\n", "utf-8");
-      wf(
+      mkdirSync(join(cwd, ".pi", "intents"), { recursive: true });
+      writeFileSync(join(cwd, ".pi", "intents", `${id}.md`), "# Legacy body\n", "utf-8");
+      writeFileSync(
         join(cwd, ".pi", "intents.json"),
         JSON.stringify({
-          activeIntentId: id,
           intents: [{ id, title: "Legacy", createdAt: 1 }],
         }),
         "utf-8",
@@ -445,8 +464,8 @@ describe("file layout", () => {
     });
   });
 
-  test("deleteIntent removes the whole intent directory", () => {
-    withTempDir((cwd) => {
+  test("deleteIntent removes the whole intent directory", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "to delete");
       // Seed a log so we can prove the dir (not just intent.md) is gone.
@@ -458,8 +477,8 @@ describe("file layout", () => {
 });
 
 describe("log and verification helpers", () => {
-  test("appendLogEntry creates and appends a timestamped block", () => {
-    withTempDir((cwd) => {
+  test("appendLogEntry creates and appends a timestamped block", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "work");
       appendLogEntry(cwd, intent.id, {
@@ -479,14 +498,14 @@ describe("log and verification helpers", () => {
     });
   });
 
-  test("readLog returns empty string when no log exists", () => {
-    withTempDir((cwd) => {
+  test("readLog returns empty string when no log exists", async () => {
+    await withTempDir((cwd) => {
       assert.equal(readLog(cwd, "nonexistent"), "");
     });
   });
 
-  test("writeVerification + readVerification round-trip", () => {
-    withTempDir((cwd) => {
+  test("writeVerification + readVerification round-trip", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "work");
       const result = {
@@ -507,20 +526,20 @@ describe("log and verification helpers", () => {
     });
   });
 
-  test("readVerification returns null when no file exists", () => {
-    withTempDir((cwd) => {
+  test("readVerification returns null when no file exists", async () => {
+    await withTempDir((cwd) => {
       assert.equal(readVerification(cwd, "nonexistent"), null);
     });
   });
 
-  test("intentLogPath returns the log location inside the intent dir", () => {
-    withTempDir((cwd) => {
+  test("intentLogPath returns the log location inside the intent dir", async () => {
+    await withTempDir((cwd) => {
       assert.ok(intentLogPath(cwd, "abc").endsWith(join("abc", "log.md")));
     });
   });
 
-  test("intentUnderstandingPath returns the understanding location", () => {
-    withTempDir((cwd) => {
+  test("intentUnderstandingPath returns the understanding location", async () => {
+    await withTempDir((cwd) => {
       assert.ok(
         intentUnderstandingPath(cwd, "abc").endsWith(
           join("abc", "understanding.md"),
@@ -529,8 +548,8 @@ describe("log and verification helpers", () => {
     });
   });
 
-  test("writeUnderstanding + readUnderstanding round-trip", () => {
-    withTempDir((cwd) => {
+  test("writeUnderstanding + readUnderstanding round-trip", async () => {
+    await withTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "work");
       const understanding = `Problem: Add JWT auth
@@ -544,24 +563,71 @@ Next steps:
     });
   });
 
-  test("readUnderstanding returns empty string when no file exists", () => {
-    withTempDir((cwd) => {
+  test("readUnderstanding returns empty string when no file exists", async () => {
+    await withTempDir((cwd) => {
       assert.equal(readUnderstanding(cwd, "nonexistent"), "");
     });
   });
 });
 
 describe("getActiveIntent", () => {
-  test("returns undefined when no active intent", () => {
-    const store = { activeIntentId: null, intents: [] };
-    assert.equal(getActiveIntent(store), undefined);
+  test("returns undefined when no active intent", async () => {
+    await withTempDir((cwd) => {
+      const store = { intents: [] };
+      assert.equal(getActiveIntent(store, cwd), undefined);
+    });
   });
 
-  test("returns the active intent", () => {
-    withTempDir((cwd) => {
+  test("returns the active intent when set via writeActiveIntent", async () => {
+    await withGitTempDir((cwd) => {
       const store = loadStore(cwd);
       const intent = createIntent(store, cwd, "active one");
-      assert.equal(getActiveIntent(store)?.id, intent.id);
+      writeActiveIntent(cwd, intent.id);
+      assert.equal(getActiveIntent(store, cwd)?.id, intent.id);
     });
+  });
+
+  test("returns undefined when active id does not match any intent", async () => {
+    await withGitTempDir((cwd) => {
+      const store = { intents: [] };
+      writeActiveIntent(cwd, "no-such-id");
+      assert.equal(getActiveIntent(store, cwd), undefined);
+    });
+  });
+});
+
+describe("loadStore reads main repo .pi/ from a feature worktree", () => {
+  test("loadStore reads main repo .pi/ from a feature worktree", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { mkdtempSync: mktd, writeFileSync: wf, mkdirSync: mk, rmSync: rm } = await import("node:fs");
+    const { tmpdir: td } = await import("node:os");
+    const { join: j } = await import("node:path");
+    const dir = mktd(j(td(), "pi-store-wt-"));
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: dir });
+      execFileSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+      execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+      wf(j(dir, "README"), "x");
+      execFileSync("git", ["add", "."], { cwd: dir });
+      execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+
+      mk(j(dir, ".pi"), { recursive: true });
+      wf(
+        j(dir, ".pi", "intents.json"),
+        JSON.stringify({ intents: [{ id: "x", title: "T", createdAt: 1, updatedAt: 1, parentId: null, phase: "defining", reworkCount: 0 }] }),
+      );
+
+      const wtPath = j(dir, "..", "store-wt-feat");
+      execFileSync("git", ["worktree", "add", "-b", "feat", wtPath], { cwd: dir });
+      try {
+        const store = loadStore(wtPath); // should read main's intents.json
+        assert.equal(store.intents.length, 1);
+        assert.equal(store.intents[0].id, "x");
+      } finally {
+        execFileSync("git", ["worktree", "remove", "--force", wtPath], { cwd: dir });
+      }
+    } finally {
+      rm(dir, { recursive: true, force: true });
+    }
   });
 });
