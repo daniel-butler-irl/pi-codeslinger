@@ -177,3 +177,113 @@ model: gpt-4o
     });
   });
 });
+
+describe("auditAgentDefinitions", () => {
+  test("errors when canonical role is missing", async () => {
+    const { auditAgentDefinitions } = await import("./agent-defs.ts");
+    const defs = new Map();
+    const audit = auditAgentDefinitions(defs, ["intent-implementer", "intent-reviewer"]);
+    assert.equal(audit.errors.length, 2);
+    assert.match(audit.errors[0], /not loaded/);
+  });
+
+  test("errors when canonical role lacks provider/model", async () => {
+    const { auditAgentDefinitions } = await import("./agent-defs.ts");
+    const defs = new Map([
+      [
+        "intent-implementer",
+        {
+          name: "intent-implementer",
+          description: "x",
+          tools: [],
+          systemPrompt: "x",
+        },
+      ],
+      [
+        "intent-reviewer",
+        {
+          name: "intent-reviewer",
+          description: "x",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          tools: [],
+          systemPrompt: "x",
+        },
+      ],
+    ]);
+    const audit = auditAgentDefinitions(defs, ["intent-implementer", "intent-reviewer"]);
+    assert.equal(audit.errors.length, 1);
+    assert.match(audit.errors[0], /must declare provider and model/);
+  });
+
+  test("warns for non-canonical roles missing provider/model", async () => {
+    const { auditAgentDefinitions } = await import("./agent-defs.ts");
+    const defs = new Map([
+      [
+        "intent-implementer",
+        {
+          name: "intent-implementer",
+          description: "x",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          tools: [],
+          systemPrompt: "x",
+        },
+      ],
+      [
+        "intent-reviewer",
+        {
+          name: "intent-reviewer",
+          description: "x",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          tools: [],
+          systemPrompt: "x",
+        },
+      ],
+      [
+        "extra-helper",
+        {
+          name: "extra-helper",
+          description: "x",
+          tools: [],
+          systemPrompt: "x",
+        },
+      ],
+    ]);
+    const audit = auditAgentDefinitions(defs, ["intent-implementer", "intent-reviewer"]);
+    assert.equal(audit.errors.length, 0);
+    assert.equal(audit.warnings.length, 1);
+    assert.match(audit.warnings[0], /extra-helper/);
+  });
+
+  test("clean audit returns no errors or warnings", async () => {
+    const { auditAgentDefinitions } = await import("./agent-defs.ts");
+    const defs = new Map([
+      [
+        "intent-implementer",
+        {
+          name: "intent-implementer",
+          description: "x",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          tools: [],
+          systemPrompt: "x",
+        },
+      ],
+      [
+        "intent-reviewer",
+        {
+          name: "intent-reviewer",
+          description: "x",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          tools: [],
+          systemPrompt: "x",
+        },
+      ],
+    ]);
+    const audit = auditAgentDefinitions(defs, ["intent-implementer", "intent-reviewer"]);
+    assert.deepEqual(audit, { errors: [], warnings: [] });
+  });
+});

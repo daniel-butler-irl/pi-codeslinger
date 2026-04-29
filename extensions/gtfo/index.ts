@@ -11,6 +11,15 @@ import {
   unlinkSync,
 } from "fs";
 import { join, dirname } from "path";
+// Intent store helpers are imported with .ts extension so the import resolves
+// correctly under both the --experimental-strip-types test runner and the
+// pi-coding-agent bundler (moduleResolution: "bundler", allowImportingTsExtensions).
+// A cross-extension .js import would fail at test time because Node's strip-types
+// does not map .js → .ts across directory boundaries.
+import {
+  loadIntentContent,
+  readUnderstanding,
+} from "../intent/store.ts";
 
 // The subset of GTFOState that is meaningful to persist across restarts.
 // Excludes transients: assessmentInProgress, nextThreshold.
@@ -664,6 +673,27 @@ REASON: [your reasoning]`;
     // Build transcript for the model prompt.
     const messages = extractTranscript(ctx);
 
+    // Detect active intent. When present, use intent.md + understanding.md as
+    // known context and ask the model for delta only (micro-task state, dirty
+    // edits, decisions not yet promoted to understanding.md). This prevents the
+    // handover from re-stating what the intent extension already tracks.
+    const activeIntentId = getActiveIntentId(ctx);
+    let intentContract = "";
+    let currentUnderstanding = "";
+
+    if (activeIntentId) {
+      try {
+        intentContract = loadIntentContent(ctx.cwd, activeIntentId);
+      } catch {
+        // Unreadable — proceed with empty.
+      }
+      try {
+        currentUnderstanding = readUnderstanding(ctx.cwd, activeIntentId);
+      } catch {
+        // Unreadable — proceed with empty.
+      }
+    }
+
     // Extract intent summary for fallback template.
     const branch = ctx.sessionManager.getBranch();
     let intentSummary = "No active intent.";
@@ -689,7 +719,37 @@ REASON: [your reasoning]`;
 
       const { session } = await createAgentSession({ model: assessmentModel });
 
-      const handoverPrompt = `You are generating a session handover document for a coding assistant session.
+      let handoverPrompt: string;
+
+      if (activeIntentId) {
+        // Intent-aware prompt: known context is already captured in intent.md
+        // and understanding.md. Emit delta only — what has changed or is in
+        // flight that is NOT yet reflected in those documents.
+        handoverPrompt = `You are generating a session handover document for a coding assistant session.
+
+The following documents are ALREADY KNOWN to the next session via the intent extension and do NOT need restating:
+
+## Intent Contract (intent.md)
+${intentContract || "(empty)"}
+
+## Current Understanding (understanding.md)
+${currentUnderstanding || "(empty)"}
+
+## Conversation Transcript
+${JSON.stringify(messages, null, 2)}
+
+## Task
+Produce a DELTA handover — capture only what is NOT already captured in the intent contract and understanding above.
+Focus on:
+1. Micro-task state: what specific sub-task was in progress when the session ended
+2. Dirty / in-flight edits: files modified but not yet committed or stabilised
+3. Decisions made in this session that are not yet promoted to understanding.md
+4. Blockers or open questions discovered in this session
+
+Use markdown headings (##) for each section. Do NOT restate the intent description or anything already in understanding.md.
+Do NOT include a top-level heading — it will be prepended. Start directly with "## In-Progress Sub-Task".`;
+      } else {
+        handoverPrompt = `You are generating a session handover document for a coding assistant session.
 
 ## Conversation Transcript
 ${JSON.stringify(messages, null, 2)}
@@ -705,6 +765,7 @@ Produce a detailed handover document with exactly these sections in this order:
 
 Write each section with specific details from the conversation. Use markdown headings (##) for each section.
 Do NOT include a top-level heading — it will be prepended. Start directly with "## Current Task/Intent Summary".`;
+      }
 
       await session.prompt(handoverPrompt);
 
@@ -735,6 +796,28 @@ Do NOT include a top-level heading — it will be prepended. Start directly with
       "GTFO: could not reach assessment model; using template handover",
       "warning",
     );
+
+    if (activeIntentId) {
+      const sections = [
+        "## In-Progress Sub-Task",
+        "",
+        "*(Review recent conversation for the specific sub-task in progress)*",
+        "",
+        "## In-Flight Edits",
+        "",
+        "*(Note any files modified but not yet committed)*",
+        "",
+        "## Session Decisions Not Yet in understanding.md",
+        "",
+        "*(Extract decisions made this session that haven't been promoted)*",
+        "",
+        "## Blockers / Open Questions",
+        "",
+        "*(Note any blockers or open questions discovered this session)*",
+      ];
+      return header + sections.join("\n");
+    }
+
     const sections = [
       "## Current Task/Intent Summary",
       "",

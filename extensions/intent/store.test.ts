@@ -130,6 +130,7 @@ describe("saveStore / loadStore round-trip", () => {
         reworkCount: 3,
         worktreeBranch: undefined,
         worktreePath: undefined,
+        phaseEnteredAt: 2,
       };
       const original = { intents: [intent] };
       await saveStore(cwd, original);

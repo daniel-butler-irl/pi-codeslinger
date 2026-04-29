@@ -270,3 +270,78 @@ describe("createIntentSidebar", () => {
     });
   });
 });
+
+describe("createIntentSidebar — running agents section", () => {
+  test("renders Running Agents section when agents are present", () => {
+    const panel = createIntentSidebar(emptyStore, mockTui(), mockTheme());
+    panel.updateAgents([
+      { intentId: "i1", intentTitle: "Fix auth", role: "implementer", status: "running" },
+    ]);
+    const lines = panel.render(40);
+    assert.ok(lines.some((l) => l.includes("Running Agents")));
+    assert.ok(lines.some((l) => l.includes("Fix auth")));
+    assert.ok(lines.some((l) => l.includes("implementer")));
+  });
+
+  test("does not render Running Agents section when no agents", () => {
+    const panel = createIntentSidebar(emptyStore, mockTui(), mockTheme());
+    const lines = panel.render(40);
+    assert.ok(!lines.some((l) => l.includes("Running Agents")));
+  });
+
+  test("shows status text for running agent", () => {
+    const panel = createIntentSidebar(emptyStore, mockTui(), mockTheme());
+    panel.updateAgents([
+      { intentId: "i1", intentTitle: "Ship feature", role: "reviewer", status: "checking tests" },
+    ]);
+    const lines = panel.render(40);
+    assert.ok(lines.some((l) => l.includes("checking tests")));
+  });
+
+  test("selection callback fires on Enter when agent is selected", () => {
+    const panel = createIntentSidebar(emptyStore, mockTui(), mockTheme());
+    panel.updateAgents([
+      { intentId: "i1", intentTitle: "Fix auth", role: "implementer", status: "running" },
+    ]);
+    const selected: Array<[string, string]> = [];
+    panel.setOnSelectAgent((intentId, role) => {
+      selected.push([intentId, role]);
+    });
+    // Simulate down-arrow to select first agent (index 0 — default is -1 so we go to 0)
+    // Actually default selectedAgentIndex is -1 so we need an up/down first.
+    // Down arrow moves from -1 to 0:
+    panel.handleInput("\x1b[B");
+    // Enter triggers selection
+    panel.handleInput("\r");
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0][0], "i1");
+    assert.equal(selected[0][1], "implementer");
+  });
+
+  test("no selection callback when no agents", () => {
+    const panel = createIntentSidebar(emptyStore, mockTui(), mockTheme());
+    const selected: Array<[string, string]> = [];
+    panel.setOnSelectAgent((intentId, role) => {
+      selected.push([intentId, role]);
+    });
+    panel.handleInput("\r");
+    assert.equal(selected.length, 0);
+  });
+
+  test("updateAgents clears selected index when agents list shrinks", () => {
+    const panel = createIntentSidebar(emptyStore, mockTui(), mockTheme());
+    panel.updateAgents([
+      { intentId: "i1", intentTitle: "A", role: "implementer", status: "running" },
+      { intentId: "i2", intentTitle: "B", role: "reviewer", status: "running" },
+    ]);
+    // Select index 1
+    panel.handleInput("\x1b[B");
+    panel.handleInput("\x1b[B");
+    // Now shrink to 1 agent — should not crash
+    panel.updateAgents([
+      { intentId: "i1", intentTitle: "A", role: "implementer", status: "running" },
+    ]);
+    const lines = panel.render(40);
+    assert.ok(lines.some((l) => l.includes("Running Agents")));
+  });
+});

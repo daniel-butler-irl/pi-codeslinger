@@ -46,6 +46,9 @@ import {
 import { readActiveIntent, writeActiveIntent } from "./active-local.js";
 import { createIntentSidebar } from "./panel.js";
 import { IntentOverlayComponent, type OverlayAction } from "./overlay.js";
+import { AgentOverlayComponent } from "../orchestrator/agent-overlay.js";
+import { getDriver } from "../orchestrator/index.js";
+import type { AgentRole } from "../orchestrator/state.js";
 import { generateFallbackTitle } from "./title-generator.js";
 
 /**
@@ -84,6 +87,7 @@ export default function (pi: ExtensionAPI) {
   let panel: ReturnType<typeof createIntentSidebar> | null = null;
   let tuiRef: TUI | null = null;
   let cwdRef: string = process.cwd();
+  let sessionCtx: ExtensionContext | null = null;
 
   // Track last injection to determine when re-injection is needed
   interface InjectionState {
@@ -272,6 +276,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     store = loadStore(ctx.cwd);
     cwdRef = ctx.cwd;
+    sessionCtx = ctx;
 
     // Emit event if there's an active intent so the agent knows to load understanding
     const active = getActiveIntent(store, ctx.cwd);
@@ -323,6 +328,10 @@ export default function (pi: ExtensionAPI) {
 
         panel = createIntentSidebar(store, tui, theme, cwdRef);
         refreshPanel();
+
+        panel.setOnSelectAgent((intentId, role) => {
+          void showAgentOverlay(intentId, role, tui, theme);
+        });
 
         const stored = (tui as any).__intentOriginalChildren as
           | Component[]
@@ -428,6 +437,13 @@ export default function (pi: ExtensionAPI) {
     panel?.updateStatus(message);
   });
 
+  pi.events.on("orchestrator:agents-changed", (payload: unknown) => {
+    const { agents } = payload as {
+      agents: Array<{ intentId: string; intentTitle: string; role: AgentRole; status: string }>;
+    };
+    panel?.updateAgents(agents);
+  });
+
   // ── Lock enforcement ────────────────────────────────────────────────────
   //
   // Any intent not in the "defining" phase has its contract file frozen.
@@ -457,6 +473,31 @@ export default function (pi: ExtensionAPI) {
       };
     }
   });
+
+  // ── Agent overlay handler ──────────────────────────────────────────────────
+
+  async function showAgentOverlay(
+    intentId: string,
+    role: AgentRole,
+    tui: import("@mariozechner/pi-tui").TUI,
+    theme: import("@mariozechner/pi-coding-agent").Theme,
+  ): Promise<void> {
+    const driver = getDriver(cwdRef);
+    if (!driver) return;
+    const handle = driver.getAgentHandle(intentId, role);
+    if (!handle) return;
+
+    const store2 = loadStore(cwdRef);
+    const intent = store2.intents.find((i) => i.id === intentId);
+    const intentTitle = intent?.title ?? intentId;
+
+    if (!sessionCtx) return;
+    await sessionCtx.ui.custom<void>(
+      (_t, _theme, _kb, done) =>
+        new AgentOverlayComponent(tui, theme, handle, intentTitle, () => done(undefined)),
+      { overlay: true },
+    );
+  }
 
   // ── Intent overlay handler ─────────────────────────────────────────────────
 
@@ -892,6 +933,51 @@ export default function (pi: ExtensionAPI) {
           details: undefined,
         };
       }
+
+      // Gate: understanding.md must exist, be non-empty, and be no older
+      // than the current implementing phase entry. The next session is
+      // bootstrapped from intent.md + understanding.md, so the
+      // implementer must update understanding before signaling done.
+      const understandingPath = intentUnderstandingPath(cwdRef, active.id);
+      const phaseEnteredAt = active.phaseEnteredAt ?? active.updatedAt;
+      let stale = false;
+      let reason = "";
+      try {
+        const { existsSync, statSync } = await import("fs");
+        if (!existsSync(understandingPath)) {
+          stale = true;
+          reason = "understanding.md does not exist";
+        } else {
+          const understanding = readUnderstanding(cwdRef, active.id).trim();
+          if (!understanding) {
+            stale = true;
+            reason = "understanding.md is empty";
+          } else if (statSync(understandingPath).mtimeMs < phaseEnteredAt) {
+            stale = true;
+            reason = "understanding.md has not been updated this implementing phase";
+          }
+        }
+      } catch (err) {
+        stale = true;
+        reason = `could not stat understanding.md: ${(err as Error).message}`;
+      }
+      if (stale) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                `Cannot propose done: ${reason}. Call update_understanding ` +
+                `with the current state of work (what was done, key decisions, ` +
+                `what remains) before signalling done. The next session ` +
+                `bootstraps from understanding.md.`,
+            },
+          ],
+          isError: true,
+          details: undefined,
+        };
+      }
+
       pi.events.emit("orchestrator:proposal-signal", {
         intentId: active.id,
         summary: params.summary,
@@ -1206,6 +1292,18 @@ export default function (pi: ExtensionAPI) {
         // session_start handler will pick up ctx.cwd from the new process cwd.
         process.chdir(created.path);
         await ctx.newSession();
+      } else if (!isActiveIntent) {
+        writeActiveIntent(ctx.cwd, intent.id);
+        pi.events.emit("intent:active-changed", { id: intent.id });
+        if ("newSession" in ctx) {
+          process.chdir(created.path);
+          await ctx.newSession();
+        } else {
+          ctx.ui.notify(
+            `Intent "${intent.title}" is now active. Switch to it manually to start a fresh session.`,
+            "info",
+          );
+        }
       }
     } catch (err) {
       ctx.ui.notify((err as Error).message, "warning");
@@ -1216,6 +1314,38 @@ export default function (pi: ExtensionAPI) {
     ctx: ExtensionCommandContext | ExtensionContext,
     intent: Intent,
   ): Promise<"done" | "blocked"> {
+    // For child intents, enforce that understanding.md is current at done.
+    // The parent's resume prompt embeds the child's understanding.md as
+    // its summary; an empty/stale file leaves the parent without context.
+    if (intent.parentId) {
+      const understandingPath = intentUnderstandingPath(ctx.cwd, intent.id);
+      const phaseEnteredAt = intent.phaseEnteredAt ?? intent.updatedAt;
+      const { existsSync, statSync } = await import("fs");
+      let stale = false;
+      let reason = "";
+      if (!existsSync(understandingPath)) {
+        stale = true;
+        reason = "understanding.md does not exist";
+      } else {
+        const understanding = readUnderstanding(ctx.cwd, intent.id).trim();
+        if (!understanding) {
+          stale = true;
+          reason = "understanding.md is empty";
+        } else if (statSync(understandingPath).mtimeMs < phaseEnteredAt) {
+          stale = true;
+          reason =
+            "understanding.md has not been updated since the latest implementing phase";
+        }
+      }
+      if (stale) {
+        ctx.ui.notify(
+          `Cannot mark child intent done: ${reason}. The parent's resume prompt embeds this file. Call update_understanding with a summary of what the child accomplished.`,
+          "warning",
+        );
+        return "blocked";
+      }
+    }
+
     if (intent.worktreePath && intent.worktreeBranch) {
       if (isDirty(intent.worktreePath)) {
         ctx.ui.notify(
@@ -1291,6 +1421,18 @@ export default function (pi: ExtensionAPI) {
           // session_start handler will pick up ctx.cwd from the new process cwd.
           process.chdir(created.path);
           await ctx.newSession();
+        } else if (!isActiveIntent) {
+          writeActiveIntent(ctx.cwd, intentId);
+          pi.events.emit("intent:active-changed", { id: intentId });
+          if ("newSession" in ctx) {
+            process.chdir(created.path);
+            await ctx.newSession();
+          } else {
+            ctx.ui.notify(
+              `Intent "${intent.title}" is now active. Switch to it manually to start a fresh session.`,
+              "info",
+            );
+          }
         }
       } else {
         transitionPhase(store, intentId, toPhase);

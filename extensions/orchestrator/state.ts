@@ -63,6 +63,19 @@ export interface IntentFlight {
   pendingSignal: PendingSignal | null;
   /** Wired by the driver during reviewer turns to push live status to the UI. */
   onStatus?: (message: string) => void;
+  /**
+   * Set by resumeParentIfBlocked. Consumed once by the next
+   * runImplementerLoop's prompt build, then cleared. Carries the just-
+   * completed child's title + understanding.md digest so the parent
+   * picks up where the child left off without re-reading from disk.
+   */
+  pendingChildSummary?: { childTitle: string; understanding: string } | null;
+}
+
+/** A single message from an agent's conversation transcript. */
+export interface AgentTranscriptEntry {
+  role: "user" | "assistant";
+  content: string;
 }
 
 /**
@@ -76,6 +89,13 @@ export interface DispatchedAgentHandle {
   prompt: (text: string) => Promise<void>;
   /** Dispose the underlying session; must be called to release resources. */
   dispose: () => Promise<void>;
+  /** Read the agent's conversation transcript as flat text entries. */
+  getTranscript: () => AgentTranscriptEntry[];
+  /**
+   * Send a steering message to the agent. If the agent is mid-turn the
+   * message is queued and flushed after the in-flight prompt resolves.
+   */
+  sendUserMessage: (text: string) => Promise<void>;
 }
 
 export function newFlight(intentId: string): IntentFlight {

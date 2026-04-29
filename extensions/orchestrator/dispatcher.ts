@@ -26,6 +26,7 @@ import {
 import type { AgentDefinition } from "./agent-defs.ts";
 import type {
   AgentRole,
+  AgentTranscriptEntry,
   DispatchedAgentHandle,
   IntentFlight,
 } from "./state.ts";
@@ -154,13 +155,79 @@ export async function dispatchAgent(
     customTools: protocolTools,
   });
 
+  let promptInFlight = false;
+  const messageQueue: string[] = [];
+
+  const flushQueue = async () => {
+    while (messageQueue.length > 0 && !promptInFlight) {
+      const next = messageQueue.shift()!;
+      promptInFlight = true;
+      try {
+        await session.prompt(next);
+      } finally {
+        promptInFlight = false;
+      }
+    }
+  };
+
+  const getTranscript = (): AgentTranscriptEntry[] => {
+    const entries: AgentTranscriptEntry[] = [];
+    for (const msg of session.state.messages) {
+      if (msg.role === "user") {
+        const text =
+          typeof msg.content === "string"
+            ? msg.content
+            : Array.isArray(msg.content)
+              ? msg.content
+                  .filter((b: any) => b.type === "text")
+                  .map((b: any) => b.text as string)
+                  .join("")
+              : "";
+        if (text) entries.push({ role: "user", content: text });
+      } else if (msg.role === "assistant") {
+        const text = Array.isArray(msg.content)
+          ? msg.content
+              .filter((b: any) => b.type === "text")
+              .map((b: any) => b.text as string)
+              .join("")
+          : typeof msg.content === "string"
+            ? msg.content
+            : "";
+        if (text) entries.push({ role: "assistant", content: text });
+      }
+    }
+    return entries;
+  };
+
+  const sendUserMessage = async (text: string): Promise<void> => {
+    if (promptInFlight) {
+      messageQueue.push(text);
+      return;
+    }
+    promptInFlight = true;
+    try {
+      await session.prompt(text);
+    } finally {
+      promptInFlight = false;
+      await flushQueue();
+    }
+  };
+
   return {
     role: opts.role,
     prompt: async (text: string) => {
-      await session.prompt(text);
+      promptInFlight = true;
+      try {
+        await session.prompt(text);
+      } finally {
+        promptInFlight = false;
+        await flushQueue();
+      }
     },
     dispose: async () => {
       session.dispose();
     },
+    getTranscript,
+    sendUserMessage,
   };
 }

@@ -19,6 +19,8 @@ function mockHandle(
     dispose: async () => {
       onDispose?.();
     },
+    getTranscript: () => [],
+    sendUserMessage: async () => {},
   };
 }
 
@@ -84,6 +86,8 @@ describe("disposeFlight", () => {
       dispose: async () => {
         throw new Error("boom");
       },
+      getTranscript: () => [],
+      sendUserMessage: async () => {},
     });
     registerAgent(
       f,

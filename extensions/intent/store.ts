@@ -58,6 +58,12 @@ export interface Intent {
   reworkCount: number;
   worktreeBranch?: string;
   worktreePath?: string;
+  /**
+   * Timestamp of the most recent transition INTO the current phase.
+   * Set by transitionPhase. Used by the orchestrator to gate proposal
+   * signals on a fresh understanding.md.
+   */
+  phaseEnteredAt?: number;
 }
 
 /**
@@ -90,6 +96,7 @@ function migrateIntent(
     reworkCount: raw.reworkCount ?? 0,
     worktreeBranch: raw.worktreeBranch,
     worktreePath: raw.worktreePath,
+    phaseEnteredAt: raw.phaseEnteredAt ?? raw.updatedAt ?? raw.createdAt,
   };
 }
 
@@ -476,6 +483,7 @@ export function createIntent(
     parentId: options?.parentId ?? null,
     phase: "defining",
     reworkCount: 0,
+    phaseEnteredAt: now,
   };
   store.intents.push(intent);
   saveIntentContent(cwd, id, intentTemplate(description));
@@ -555,7 +563,9 @@ export function transitionPhase(
     );
   }
   intent.phase = to;
-  intent.updatedAt = Date.now();
+  const now = Date.now();
+  intent.updatedAt = now;
+  intent.phaseEnteredAt = now;
   return intent;
 }
 
