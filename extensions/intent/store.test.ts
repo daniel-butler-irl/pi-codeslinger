@@ -13,6 +13,7 @@ import {
   readFileSync,
   mkdirSync,
   writeFileSync,
+  realpathSync,
 } from "fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "os";
@@ -46,6 +47,7 @@ import {
   readVerification,
   type Intent,
   type IntentPhase,
+  type IntentStore,
 } from "./store.ts";
 import { readActiveIntent, writeActiveIntent } from "./active-local.ts";
 import { existsSync } from "fs";
@@ -123,6 +125,8 @@ describe("saveStore / loadStore round-trip", () => {
         parentId: null,
         phase: "implementing",
         reworkCount: 3,
+        worktreeBranch: undefined,
+        worktreePath: undefined,
       };
       const original = { intents: [intent] };
       await saveStore(cwd, original);
@@ -631,6 +635,42 @@ describe("audit-trail writes go to feature worktree, not main repo", () => {
       } finally {
         execFileSync("git", ["worktree", "remove", "--force", wtPath], { cwd: dir });
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("worktree fields on Intent", () => {
+  test("Intent supports optional worktree fields", () => {
+    const store: IntentStore = { intents: [] };
+    const intent = createIntent(store, process.cwd(), "x");
+    intent.worktreeBranch = "intent/x-abc";
+    intent.worktreePath = "/tmp/x";
+    // Round-trip via JSON
+    const json = JSON.stringify(store);
+    const parsed = JSON.parse(json) as IntentStore;
+    assert.equal(parsed.intents[0].worktreeBranch, "intent/x-abc");
+    assert.equal(parsed.intents[0].worktreePath, "/tmp/x");
+  });
+
+  test("migrateIntent fills missing worktree fields with undefined", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "pi-mig-")));
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: dir });
+      execFileSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+      execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+      writeFileSync(join(dir, "README"), "x");
+      execFileSync("git", ["add", "."], { cwd: dir });
+      execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+      mkdirSync(join(dir, ".pi"), { recursive: true });
+      writeFileSync(
+        join(dir, ".pi", "intents.json"),
+        JSON.stringify({ intents: [{ id: "x", title: "T", createdAt: 1 }] }),
+      );
+      const store = loadStore(dir);
+      assert.equal(store.intents[0].worktreeBranch, undefined);
+      assert.equal(store.intents[0].worktreePath, undefined);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

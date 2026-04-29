@@ -56,6 +56,8 @@ export interface Intent {
   parentId: string | null;
   phase: IntentPhase;
   reworkCount: number;
+  worktreeBranch?: string;
+  worktreePath?: string;
 }
 
 /**
@@ -86,6 +88,8 @@ function migrateIntent(
     parentId: raw.parentId ?? null,
     phase: raw.phase ?? "defining",
     reworkCount: raw.reworkCount ?? 0,
+    worktreeBranch: raw.worktreeBranch,
+    worktreePath: raw.worktreePath,
   };
 }
 
