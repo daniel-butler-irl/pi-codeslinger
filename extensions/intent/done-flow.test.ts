@@ -62,3 +62,19 @@ test("squashMergeWorktree returns conflict status on conflicting changes", () =>
     cleanup();
   }
 });
+
+test("squashMergeWorktree treats empty branch as merged", () => {
+  const { dir, cleanup } = initRepo();
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "pi-done-base3-")));
+  process.env.PI_WORKTREE_BASE = base;
+  try {
+    const { branch } = createWorktree(dir, "Empty", "abcdef03");
+    // no commits on the branch beyond what was already on main
+    const status = squashMergeWorktree(dir, branch, "feat: empty");
+    assert.equal(status.kind, "merged");
+  } finally {
+    delete process.env.PI_WORKTREE_BASE;
+    rmSync(base, { recursive: true, force: true });
+    cleanup();
+  }
+});

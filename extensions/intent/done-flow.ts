@@ -34,10 +34,31 @@ export function squashMergeWorktree(
     return { kind: "conflict", branch, message: (err as Error).message };
   }
   try {
-    execFileSync("git", ["commit", "-m", commitMessage], { cwd: main, stdio: ["ignore", "pipe", "pipe"] });
-  } catch {
-    // Nothing to commit (branch was empty). Treat as merged.
-    return { kind: "merged", branch };
+    execFileSync("git", ["commit", "-m", commitMessage], {
+      cwd: main,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (err) {
+    const msg = (err as Error).message ?? "";
+    // execFileSync puts stdout/stderr on the error object when stdio is "pipe"
+    const out = ((err as NodeJS.ErrnoException & { stdout?: Buffer }).stdout?.toString() ?? "") +
+                ((err as NodeJS.ErrnoException & { stderr?: Buffer }).stderr?.toString() ?? "");
+    if (
+      msg.includes("nothing to commit") ||
+      msg.includes("nothing added to commit") ||
+      out.includes("nothing to commit") ||
+      out.includes("nothing added to commit")
+    ) {
+      return { kind: "merged", branch };
+    }
+    // Real commit failure: staged but uncommitted. Reset to clean state and report.
+    try {
+      execFileSync("git", ["reset", "--hard", "HEAD"], {
+        cwd: main,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {}
+    return { kind: "error", branch, message: `Commit failed after squash: ${msg}` };
   }
   return { kind: "merged", branch };
 }

@@ -1234,7 +1234,10 @@ export default function (pi: ExtensionAPI) {
         `Worktree at ${intent.worktreePath} (branch ${intent.worktreeBranch}) is no longer needed. Delete it?`,
       );
       if (remove) {
-        if (ctx.cwd.startsWith(intent.worktreePath)) {
+        if (
+          ctx.cwd === intent.worktreePath ||
+          ctx.cwd.startsWith(intent.worktreePath + "/")
+        ) {
           ctx.ui.notify(
             `Note: current shell is inside the worktree. cd to main repo manually after deletion.`,
             "info",
