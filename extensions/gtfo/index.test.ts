@@ -37,7 +37,15 @@ function buildMockPi() {
       entries.push({ type: "custom", customType, data }),
     sendUserMessage: () => {},
   };
-  return { pi, shortcuts, commands, handlers, eventHandlers, messages, entries };
+  return {
+    pi,
+    shortcuts,
+    commands,
+    handlers,
+    eventHandlers,
+    messages,
+    entries,
+  };
 }
 
 function buildBaseCtx(
@@ -75,16 +83,17 @@ function buildBaseCtx(
 
 // Build a stub createAgentSession that returns a fixed reply text.
 function makeStubSession(replyText: string): GtfoDeps["createAgentSession"] {
-  return async (_opts: any) => ({
-    session: {
-      prompt: async (_p: string) => {},
-      state: {
-        messages: [
-          { role: "assistant", content: [{ type: "text", text: replyText }] },
-        ],
+  return async (_opts: any) =>
+    ({
+      session: {
+        prompt: async (_p: string) => {},
+        state: {
+          messages: [
+            { role: "assistant", content: [{ type: "text", text: replyText }] },
+          ],
+        },
       },
-    },
-  }) as any;
+    }) as any;
 }
 
 describe("GTFO extension", () => {
@@ -225,7 +234,12 @@ describe("GTFO extension", () => {
     // Helper: create an extension with a stubbed session and drive turn_end through
     // the NO+DISABLE dialog to set state.disabled = true. Returns the handlers so
     // the caller can make a second turn_end call.
-    async function disableViaDialog(pi: any, handlers: any, tmpDir: string, sessionId: string) {
+    async function disableViaDialog(
+      pi: any,
+      handlers: any,
+      tmpDir: string,
+      sessionId: string,
+    ) {
       // First turn_end drives assessment: stub returns NO verdict,
       // user selects DISABLE.
       const ctx = buildBaseCtx(tmpDir, sessionId);
@@ -399,12 +413,24 @@ describe("GTFO extension", () => {
       entries.push({
         type: "custom",
         customType: "gtfo-state",
-        data: { disabled: false, lastHandoverPath: null, assessmentModel: null, pendingHandoverReason: null, baseThreshold: 60 },
+        data: {
+          disabled: false,
+          lastHandoverPath: null,
+          assessmentModel: null,
+          pendingHandoverReason: null,
+          baseThreshold: 60,
+        },
       });
       entries.push({
         type: "custom",
         customType: "gtfo-state",
-        data: { disabled: true, lastHandoverPath: null, assessmentModel: null, pendingHandoverReason: null, baseThreshold: 60 },
+        data: {
+          disabled: true,
+          lastHandoverPath: null,
+          assessmentModel: null,
+          pendingHandoverReason: null,
+          baseThreshold: 60,
+        },
       });
 
       const ctx = {
@@ -456,7 +482,13 @@ describe("GTFO extension", () => {
       entries.push({
         type: "custom",
         customType: "gtfo-state",
-        data: { disabled: false, lastHandoverPath: null, assessmentModel: null, pendingHandoverReason: null, baseThreshold: 60 },
+        data: {
+          disabled: false,
+          lastHandoverPath: null,
+          assessmentModel: null,
+          pendingHandoverReason: null,
+          baseThreshold: 60,
+        },
       });
 
       const ctx = {
@@ -478,7 +510,13 @@ describe("GTFO extension", () => {
       const ctx2 = {
         ...buildBaseCtx(tmpDir, sid),
         getContextUsage: () => ({ tokens: 150000 }), // 75% of 200k
-        ui: { notify: mock.fn(), setStatus: mock.fn(), setWidget: mock.fn(), select: selectMock, confirm: mock.fn() },
+        ui: {
+          notify: mock.fn(),
+          setStatus: mock.fn(),
+          setWidget: mock.fn(),
+          select: selectMock,
+          confirm: mock.fn(),
+        },
         sessionManager: {
           getEntries: () => entries,
           getBranch: () => [],
@@ -499,7 +537,9 @@ describe("GTFO extension", () => {
   // ── P0-3/P0-4: parseVerdict ────────────────────────────────────────────
   describe("parseVerdict (P0-3/P0-4)", () => {
     it("parses YES verdict and reason", () => {
-      const result = parseVerdict("VERDICT: YES\nREASON: Task is nearly complete.");
+      const result = parseVerdict(
+        "VERDICT: YES\nREASON: Task is nearly complete.",
+      );
       assert.strictEqual(result.verdict, "YES");
       assert.strictEqual(result.reason, "Task is nearly complete.");
     });
@@ -517,7 +557,8 @@ describe("GTFO extension", () => {
 
     it("works when leading non-text content precedes VERDICT line", () => {
       // Simulates model emitting thinking/citation text before the verdict.
-      const text = "Some thinking content here...\nMore preamble.\nVERDICT: NO\nREASON: Work is not done yet.";
+      const text =
+        "Some thinking content here...\nMore preamble.\nVERDICT: NO\nREASON: Work is not done yet.";
       const result = parseVerdict(text);
       assert.strictEqual(result.verdict, "NO");
       assert.strictEqual(result.reason, "Work is not done yet.");
@@ -540,7 +581,11 @@ describe("GTFO extension", () => {
       const intentId = "test-intent-abc123";
       // The intent dir must NOT exist before the command runs.
       const intentDir = join(tmpDir, ".pi", "intents", intentId);
-      assert.strictEqual(existsSync(intentDir), false, "intent dir must not exist before test");
+      assert.strictEqual(
+        existsSync(intentDir),
+        false,
+        "intent dir must not exist before test",
+      );
 
       const ctx = {
         ...buildBaseCtx(tmpDir),
@@ -615,7 +660,9 @@ describe("GTFO extension", () => {
       // Verify cancel notify fired.
       const notifyCalls = (ctx.ui.notify as any).mock.calls;
       const cancelCall = notifyCalls.find(
-        (c: any) => typeof c.arguments[0] === "string" && c.arguments[0].includes("cancelled"),
+        (c: any) =>
+          typeof c.arguments[0] === "string" &&
+          c.arguments[0].includes("cancelled"),
       );
       assert.ok(cancelCall, "must notify 'cancelled' after dialog dismiss");
 
@@ -625,7 +672,13 @@ describe("GTFO extension", () => {
         ...buildBaseCtx(tmpDir, sid),
         getContextUsage: () => ({ tokens: 150000 }), // same 75%
         model: { contextWindow: 200000, id: "test-model" },
-        ui: { notify: mock.fn(), setStatus: mock.fn(), setWidget: mock.fn(), select: selectMock2, confirm: mock.fn() },
+        ui: {
+          notify: mock.fn(),
+          setStatus: mock.fn(),
+          setWidget: mock.fn(),
+          select: selectMock2,
+          confirm: mock.fn(),
+        },
         sessionManager: {
           getEntries: () => [],
           getBranch: () => [],
@@ -709,8 +762,7 @@ describe("GTFO extension", () => {
       assert.ok(
         calls.some(
           (c: any) =>
-            typeof c.arguments[0] === "string" &&
-            c.arguments[0].includes("60"),
+            typeof c.arguments[0] === "string" && c.arguments[0].includes("60"),
         ),
         "should notify default threshold of 60",
       );
@@ -730,8 +782,19 @@ describe("GTFO extension", () => {
         ...buildBaseCtx(tmpDir, sid),
         getContextUsage: () => ({ tokens: 150000 }),
         model: { contextWindow: 200000, id: "test-model" },
-        ui: { notify: mock.fn(), setStatus: mock.fn(), setWidget: mock.fn(), select: mock.fn(async () => undefined), confirm: mock.fn() },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        ui: {
+          notify: mock.fn(),
+          setStatus: mock.fn(),
+          setWidget: mock.fn(),
+          select: mock.fn(async () => undefined),
+          confirm: mock.fn(),
+        },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
       } as any;
       await turnEnd({}, cancelCtx);
 
@@ -747,8 +810,19 @@ describe("GTFO extension", () => {
         ...buildBaseCtx(tmpDir, sid),
         getContextUsage: () => ({ tokens: 150000 }), // 75%
         model: { contextWindow: 200000, id: "test-model" },
-        ui: { notify: mock.fn(), setStatus: mock.fn(), setWidget: mock.fn(), select: selectMock, confirm: mock.fn() },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        ui: {
+          notify: mock.fn(),
+          setStatus: mock.fn(),
+          setWidget: mock.fn(),
+          select: selectMock,
+          confirm: mock.fn(),
+        },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
       } as any;
       await turnEnd({}, ctx2);
 
@@ -807,7 +881,10 @@ describe("GTFO extension", () => {
     it("registers gtfo:threshold command", () => {
       const { pi, commands } = buildMockPi();
       gtfoExt(pi);
-      assert.ok(commands.has("gtfo:threshold"), "gtfo:threshold must be registered");
+      assert.ok(
+        commands.has("gtfo:threshold"),
+        "gtfo:threshold must be registered",
+      );
     });
   });
 
@@ -827,8 +904,19 @@ describe("GTFO extension", () => {
         ...buildBaseCtx(tmpDir, sid),
         getContextUsage: () => ({ tokens: 150000 }),
         model: { contextWindow: 200000, id: "test-model" },
-        ui: { notify: mock.fn(), setStatus: mock.fn(), setWidget: mock.fn(), select: mock.fn(async () => undefined), confirm: mock.fn() },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        ui: {
+          notify: mock.fn(),
+          setStatus: mock.fn(),
+          setWidget: mock.fn(),
+          select: mock.fn(async () => undefined),
+          confirm: mock.fn(),
+        },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
       } as any;
       await turnEnd({}, cancelCtx);
 
@@ -843,8 +931,19 @@ describe("GTFO extension", () => {
         ...buildBaseCtx(tmpDir, sid),
         getContextUsage: () => ({ tokens: 150000 }),
         model: { contextWindow: 200000, id: "test-model" },
-        ui: { notify: mock.fn(), setStatus: mock.fn(), setWidget: mock.fn(), select: selectMock, confirm: mock.fn() },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        ui: {
+          notify: mock.fn(),
+          setStatus: mock.fn(),
+          setWidget: mock.fn(),
+          select: selectMock,
+          confirm: mock.fn(),
+        },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
       } as any;
       await turnEnd({}, ctx2);
 
@@ -861,7 +960,9 @@ describe("GTFO extension", () => {
     it("notifies 'nearly complete', sets status and widget, bumps nextThreshold", async () => {
       const tmpDir = mkdtempSync(join(tmpdir(), "gtfo-test-"));
       const { pi, handlers } = buildMockPi();
-      const stub = makeStubSession("VERDICT: YES\nREASON: tests passing, ready to ship");
+      const stub = makeStubSession(
+        "VERDICT: YES\nREASON: tests passing, ready to ship",
+      );
       gtfoExt(pi, { createAgentSession: stub });
 
       const sid = "yes-verdict-test";
@@ -877,7 +978,12 @@ describe("GTFO extension", () => {
           select: mock.fn(),
           confirm: mock.fn(),
         },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
       } as any;
 
       const turnEnd = handlers["turn_end"][0];
@@ -892,10 +998,22 @@ describe("GTFO extension", () => {
         ),
         "must notify 'nearly complete'",
       );
-      assert.strictEqual((ctx.ui.setStatus as any).mock.callCount(), 1, "setStatus must be called once");
-      assert.strictEqual((ctx.ui.setWidget as any).mock.callCount(), 1, "setWidget must be called once");
+      assert.strictEqual(
+        (ctx.ui.setStatus as any).mock.callCount(),
+        1,
+        "setStatus must be called once",
+      );
+      assert.strictEqual(
+        (ctx.ui.setWidget as any).mock.callCount(),
+        1,
+        "setWidget must be called once",
+      );
       // select must NOT be called on YES path.
-      assert.strictEqual((ctx.ui.select as any).mock.callCount(), 0, "select must not be called on YES path");
+      assert.strictEqual(
+        (ctx.ui.select as any).mock.callCount(),
+        0,
+        "select must not be called on YES path",
+      );
 
       // Verify nextThreshold was bumped: second turn_end at 75% must not re-trigger.
       const selectMock2 = mock.fn();
@@ -903,11 +1021,26 @@ describe("GTFO extension", () => {
         ...buildBaseCtx(tmpDir, sid),
         getContextUsage: () => ({ tokens: 150000 }),
         model: { contextWindow: 200000, id: "test-model" },
-        ui: { notify: mock.fn(), setStatus: mock.fn(), setWidget: mock.fn(), select: selectMock2, confirm: mock.fn() },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        ui: {
+          notify: mock.fn(),
+          setStatus: mock.fn(),
+          setWidget: mock.fn(),
+          select: selectMock2,
+          confirm: mock.fn(),
+        },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
       } as any;
       await turnEnd({}, ctx2);
-      assert.strictEqual(selectMock2.mock.callCount(), 0, "nextThreshold must be bumped after YES");
+      assert.strictEqual(
+        selectMock2.mock.callCount(),
+        0,
+        "nextThreshold must be bumped after YES",
+      );
     });
   });
 
@@ -931,7 +1064,12 @@ describe("GTFO extension", () => {
           select: mock.fn(async () => "Continue in current session"),
           confirm: mock.fn(),
         },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
       } as any;
 
       const turnEnd = handlers["turn_end"][0];
@@ -939,7 +1077,11 @@ describe("GTFO extension", () => {
 
       // No handover file in tmpDir.
       const piDir = join(tmpDir, ".pi");
-      assert.strictEqual(existsSync(piDir), false, "no .pi dir should be created for Continue");
+      assert.strictEqual(
+        existsSync(piDir),
+        false,
+        "no .pi dir should be created for Continue",
+      );
 
       // Verify nextThreshold bumped: second turn_end at same 75% must NOT trigger.
       const selectMock2 = mock.fn(async () => "Continue in current session");
@@ -947,11 +1089,26 @@ describe("GTFO extension", () => {
         ...buildBaseCtx(tmpDir, sid),
         getContextUsage: () => ({ tokens: 150000 }),
         model: { contextWindow: 200000, id: "test-model" },
-        ui: { notify: mock.fn(), setStatus: mock.fn(), setWidget: mock.fn(), select: selectMock2, confirm: mock.fn() },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        ui: {
+          notify: mock.fn(),
+          setStatus: mock.fn(),
+          setWidget: mock.fn(),
+          select: selectMock2,
+          confirm: mock.fn(),
+        },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
       } as any;
       await turnEnd({}, ctx2);
-      assert.strictEqual(selectMock2.mock.callCount(), 0, "nextThreshold must be bumped after Continue");
+      assert.strictEqual(
+        selectMock2.mock.callCount(),
+        0,
+        "nextThreshold must be bumped after Continue",
+      );
     });
   });
 
@@ -975,14 +1132,21 @@ describe("GTFO extension", () => {
           select: mock.fn(async () => undefined), // cancel
           confirm: mock.fn(),
         },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
       } as any;
 
       const turnEnd = handlers["turn_end"][0];
       await turnEnd({}, ctx);
 
       const cancelCall = notifyMock.mock.calls.find(
-        (c: any) => typeof c.arguments[0] === "string" && c.arguments[0].includes("cancelled"),
+        (c: any) =>
+          typeof c.arguments[0] === "string" &&
+          c.arguments[0].includes("cancelled"),
       );
       assert.ok(cancelCall, "must fire 'GTFO assessment cancelled' notify");
 
@@ -992,11 +1156,26 @@ describe("GTFO extension", () => {
         ...buildBaseCtx(tmpDir, sid),
         getContextUsage: () => ({ tokens: 150000 }),
         model: { contextWindow: 200000, id: "test-model" },
-        ui: { notify: mock.fn(), setStatus: mock.fn(), setWidget: mock.fn(), select: selectMock2, confirm: mock.fn() },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        ui: {
+          notify: mock.fn(),
+          setStatus: mock.fn(),
+          setWidget: mock.fn(),
+          select: selectMock2,
+          confirm: mock.fn(),
+        },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
       } as any;
       await turnEnd({}, ctx2);
-      assert.strictEqual(selectMock2.mock.callCount(), 0, "nextThreshold must be bumped after cancel");
+      assert.strictEqual(
+        selectMock2.mock.callCount(),
+        0,
+        "nextThreshold must be bumped after cancel",
+      );
     });
   });
 
@@ -1004,7 +1183,8 @@ describe("GTFO extension", () => {
     it("includes model reply and standard header in handover content", async () => {
       const tmpDir = mkdtempSync(join(tmpdir(), "gtfo-test-"));
       const { pi, commands } = buildMockPi();
-      const modelContent = "## Current Task/Intent Summary\n\nRefactoring the GTFO extension.";
+      const modelContent =
+        "## Current Task/Intent Summary\n\nRefactoring the GTFO extension.";
       const stub = makeStubSession(modelContent);
       gtfoExt(pi, { createAgentSession: stub });
 
@@ -1047,7 +1227,9 @@ describe("GTFO extension", () => {
     it("warns user and uses template when createAgentSession throws", async () => {
       const tmpDir = mkdtempSync(join(tmpdir(), "gtfo-test-"));
       const { pi, commands } = buildMockPi();
-      const throwingStub: GtfoDeps["createAgentSession"] = async (_opts: any) => {
+      const throwingStub: GtfoDeps["createAgentSession"] = async (
+        _opts: any,
+      ) => {
         throw new Error("model unavailable");
       };
       gtfoExt(pi, { createAgentSession: throwingStub });
@@ -1076,9 +1258,14 @@ describe("GTFO extension", () => {
       assert.ok(warnCall, "must warn about falling back to template");
 
       // Content must be template.
-      assert.ok(capturedContent, "handover content must still be passed via setup");
       assert.ok(
-        capturedContent!.includes("*(Review recent conversation for accomplishments)*"),
+        capturedContent,
+        "handover content must still be passed via setup",
+      );
+      assert.ok(
+        capturedContent!.includes(
+          "*(Review recent conversation for accomplishments)*",
+        ),
         "template fallback must include placeholder text",
       );
 
@@ -1110,10 +1297,17 @@ describe("GTFO extension", () => {
           notify: mock.fn(),
           setStatus: mock.fn(),
           setWidget: mock.fn(),
-          select: mock.fn(async () => "Create handover and switch to new session"),
+          select: mock.fn(
+            async () => "Create handover and switch to new session",
+          ),
           confirm: mock.fn(),
         },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
         // No newSession — hasNewSession returns false.
       } as any;
 
@@ -1141,7 +1335,12 @@ describe("GTFO extension", () => {
           await opts?.setup?.(sm);
           return { cancelled: false };
         },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => sid },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => sid,
+        },
       } as any;
 
       const cmd = commands.get("gtfo:handover");
@@ -1178,7 +1377,12 @@ describe("GTFO extension", () => {
           select: mock.fn(async () => "Disable GTFO for this session"),
           confirm: mock.fn(),
         },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => "session-A" },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => "session-A",
+        },
       } as any;
       await turnEnd({}, ctxA);
 
@@ -1188,8 +1392,19 @@ describe("GTFO extension", () => {
         ...buildBaseCtx(tmpDir, "session-B"),
         getContextUsage: () => ({ tokens: 180000 }),
         model: { contextWindow: 200000, id: "test-model" },
-        ui: { notify: mock.fn(), setStatus: mock.fn(), setWidget: mock.fn(), select: selectB, confirm: mock.fn() },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => "session-B" },
+        ui: {
+          notify: mock.fn(),
+          setStatus: mock.fn(),
+          setWidget: mock.fn(),
+          select: selectB,
+          confirm: mock.fn(),
+        },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => "session-B",
+        },
       } as any;
       await turnEnd({}, ctxB);
 
@@ -1220,7 +1435,12 @@ describe("GTFO extension", () => {
           select: mock.fn(async () => "Continue in current session"),
           confirm: mock.fn(),
         },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => "iso-session-A" },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => "iso-session-A",
+        },
       } as any;
       await turnEnd({}, ctxA);
 
@@ -1230,8 +1450,19 @@ describe("GTFO extension", () => {
         ...buildBaseCtx(tmpDir, "iso-session-B"),
         getContextUsage: () => ({ tokens: 120000 }), // 60%
         model: { contextWindow: 200000, id: "test-model" },
-        ui: { notify: mock.fn(), setStatus: mock.fn(), setWidget: mock.fn(), select: selectB, confirm: mock.fn() },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => "iso-session-B" },
+        ui: {
+          notify: mock.fn(),
+          setStatus: mock.fn(),
+          setWidget: mock.fn(),
+          select: selectB,
+          confirm: mock.fn(),
+        },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => "iso-session-B",
+        },
       } as any;
       await turnEnd({}, ctxB);
 
@@ -1259,10 +1490,17 @@ describe("GTFO extension", () => {
           notify: mock.fn(),
           setStatus: mock.fn(),
           setWidget: mock.fn(),
-          select: mock.fn(async () => "Create handover and switch to new session"),
+          select: mock.fn(
+            async () => "Create handover and switch to new session",
+          ),
           confirm: mock.fn(),
         },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => "reason-session-A" },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => "reason-session-A",
+        },
         // No newSession — sets pendingHandoverReason instead.
       } as any;
       await turnEnd({}, ctxA);
@@ -1281,7 +1519,12 @@ describe("GTFO extension", () => {
           await opts?.setup?.(sm);
           return { cancelled: false };
         },
-        sessionManager: { getEntries: () => [], getBranch: () => [], getCwd: () => tmpDir, getSessionId: () => "reason-session-B" },
+        sessionManager: {
+          getEntries: () => [],
+          getBranch: () => [],
+          getCwd: () => tmpDir,
+          getSessionId: () => "reason-session-B",
+        },
       } as any;
 
       const cmd = commands.get("gtfo:handover");
