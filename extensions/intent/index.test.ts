@@ -4,7 +4,10 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
 import { createIntent, loadStore, saveStore } from "./store.ts";
 
 function withTempDir(fn: (cwd: string) => Promise<void> | void) {
@@ -30,7 +33,9 @@ async function loadIntentExtension() {
   );
   const tempModule = join(tempDir, "index.testable.ts");
   writeFileSync(tempModule, source, "utf-8");
-  const module = await import(`${pathToFileURL(tempModule).href}?t=${Date.now()}`);
+  const module = await import(
+    `${pathToFileURL(tempModule).href}?t=${Date.now()}`
+  );
   rmSync(tempDir, { recursive: true, force: true });
   return module;
 }
