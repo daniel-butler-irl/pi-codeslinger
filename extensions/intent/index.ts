@@ -130,6 +130,11 @@ export default function (pi: ExtensionAPI) {
   /**
    * Inject or re-inject the active intent contract and understanding into
    * the AI assistant context. Uses display: false to keep the UI clean.
+   *
+   * Note: When sessions are restored from disk, old intent-context messages
+   * from previous active intents may appear in the context view. This is
+   * cosmetic only - the LLM receives the latest context via deliverAs: nextTurn.
+   * The customType includes the intent ID to distinguish between intents.
    */
   function injectIntentContext(): void {
     const active = getActiveIntent(store, cwdRef);
@@ -192,9 +197,10 @@ export default function (pi: ExtensionAPI) {
     const content = parts.join("\n");
 
     // Inject the message into the conversation
+    // Include intent ID in customType to distinguish between different intents
     pi.sendMessage(
       {
-        customType: "intent-context",
+        customType: `intent-context-${active.id}`,
         content,
         display: false,
       },
@@ -439,7 +445,12 @@ export default function (pi: ExtensionAPI) {
 
   pi.events.on("orchestrator:agents-changed", (payload: unknown) => {
     const { agents } = payload as {
-      agents: Array<{ intentId: string; intentTitle: string; role: AgentRole; status: string }>;
+      agents: Array<{
+        intentId: string;
+        intentTitle: string;
+        role: AgentRole;
+        status: string;
+      }>;
     };
     panel?.updateAgents(agents);
   });
@@ -494,7 +505,9 @@ export default function (pi: ExtensionAPI) {
     if (!sessionCtx) return;
     await sessionCtx.ui.custom<void>(
       (_t, _theme, _kb, done) =>
-        new AgentOverlayComponent(tui, theme, handle, intentTitle, () => done(undefined)),
+        new AgentOverlayComponent(tui, theme, handle, intentTitle, () =>
+          done(undefined),
+        ),
       { overlay: true },
     );
   }
@@ -954,7 +967,8 @@ export default function (pi: ExtensionAPI) {
             reason = "understanding.md is empty";
           } else if (statSync(understandingPath).mtimeMs < phaseEnteredAt) {
             stale = true;
-            reason = "understanding.md has not been updated this implementing phase";
+            reason =
+              "understanding.md has not been updated this implementing phase";
           }
         }
       } catch (err) {
@@ -1191,7 +1205,11 @@ export default function (pi: ExtensionAPI) {
       intent.worktreeBranch = undefined;
     }
 
-    const proposedPath = worktreePath(mainRepoRoot(ctx.cwd), intent.title, intent.id);
+    const proposedPath = worktreePath(
+      mainRepoRoot(ctx.cwd),
+      intent.title,
+      intent.id,
+    );
     const proposedBranch = branchName(intent.title, intent.id);
 
     // Recovery: if a worktree was previously created but persist failed
@@ -1203,10 +1221,11 @@ export default function (pi: ExtensionAPI) {
     }
 
     const decision = await decideTransitionToImplementing({
-      confirm: () => ctx.ui.confirm(
-        "Ready to start implementation?",
-        `This will create a worktree at ${proposedPath} on branch ${proposedBranch} and start the implementer.`,
-      ),
+      confirm: () =>
+        ctx.ui.confirm(
+          "Ready to start implementation?",
+          `This will create a worktree at ${proposedPath} on branch ${proposedBranch} and start the implementer.`,
+        ),
     });
     if (decision === "cancel") {
       ctx.ui.notify("Implementation not started.", "info");
@@ -1218,7 +1237,10 @@ export default function (pi: ExtensionAPI) {
       intent.worktreePath = created.path;
       return created;
     } catch (err) {
-      ctx.ui.notify(`Worktree creation failed: ${(err as Error).message}`, "warning");
+      ctx.ui.notify(
+        `Worktree creation failed: ${(err as Error).message}`,
+        "warning",
+      );
       return null;
     }
   }
@@ -1405,7 +1427,11 @@ export default function (pi: ExtensionAPI) {
         if (outcome === "blocked") return;
         transitionPhase(store, intentId, toPhase);
         await persist(ctx.cwd);
-        pi.events.emit("intent:phase-changed", { id: intentId, from, to: toPhase });
+        pi.events.emit("intent:phase-changed", {
+          id: intentId,
+          from,
+          to: toPhase,
+        });
         ctx.ui.notify(`Intent "${intent.title}" moved to ${toPhase}`, "info");
         return;
       } else if (toPhase === "implementing") {
@@ -1413,7 +1439,11 @@ export default function (pi: ExtensionAPI) {
         if (!created) return;
         transitionPhase(store, intentId, toPhase);
         await persist(ctx.cwd);
-        pi.events.emit("intent:phase-changed", { id: intentId, from, to: toPhase });
+        pi.events.emit("intent:phase-changed", {
+          id: intentId,
+          from,
+          to: toPhase,
+        });
         ctx.ui.notify(`Intent "${intent.title}" moved to ${toPhase}`, "info");
         if (isActiveIntent && "newSession" in ctx) {
           // pi-coding-agent's newSession() does not accept a cwd option, so we
@@ -1437,7 +1467,11 @@ export default function (pi: ExtensionAPI) {
       } else {
         transitionPhase(store, intentId, toPhase);
         await persist(ctx.cwd);
-        pi.events.emit("intent:phase-changed", { id: intentId, from, to: toPhase });
+        pi.events.emit("intent:phase-changed", {
+          id: intentId,
+          from,
+          to: toPhase,
+        });
         ctx.ui.notify(`Intent "${intent.title}" moved to ${toPhase}`, "info");
       }
     } catch (err) {
@@ -1510,7 +1544,11 @@ export default function (pi: ExtensionAPI) {
       });
     }
     // Then if the worktree exists (i.e., wasn't already deleted via done-flow), remove it.
-    if (intent.worktreePath && intent.worktreeBranch && existsSync(intent.worktreePath)) {
+    if (
+      intent.worktreePath &&
+      intent.worktreeBranch &&
+      existsSync(intent.worktreePath)
+    ) {
       removeWorktree(ctx.cwd, intent.worktreePath, intent.worktreeBranch);
     }
     // Clear active state if this was the active intent.
