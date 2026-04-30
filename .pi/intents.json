@@ -1,5 +1,4 @@
 {
-  "activeIntentId": "31dd982c-ed0d-4a12-a1f7-19ac82acc1f3",
   "intents": [
     {
       "id": "4a3df6df-ab67-4652-be59-baebb620f1dd",
@@ -8,7 +7,8 @@
       "updatedAt": 1775123440576,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1775123440576
     },
     {
       "id": "8ebae85d-d0b4-48a4-8099-e383d0bb78e3",
@@ -17,7 +17,8 @@
       "updatedAt": 1776853326555,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776853326555
     },
     {
       "id": "54badd46-ccee-4152-b4ef-de992eaa90a1",
@@ -26,7 +27,8 @@
       "updatedAt": 1776853552329,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776853552329
     },
     {
       "id": "31dd982c-ed0d-4a12-a1f7-19ac82acc1f3",
@@ -35,7 +37,8 @@
       "updatedAt": 1777465068749,
       "parentId": null,
       "phase": "done",
-      "reworkCount": 4
+      "reworkCount": 4,
+      "phaseEnteredAt": 1777465068749
     },
     {
       "id": "1ecdf543-8d81-471d-b329-d5f180c8f3db",
@@ -44,7 +47,8 @@
       "updatedAt": 1776932471548,
       "parentId": null,
       "phase": "implementing",
-      "reworkCount": 1
+      "reworkCount": 1,
+      "phaseEnteredAt": 1776932471548
     },
     {
       "id": "ce94d08e-a2c5-41cb-ae90-3b5cf92b6b27",
@@ -53,7 +57,8 @@
       "updatedAt": 1776855882205,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776855882205
     },
     {
       "id": "9b6bb288-0484-442c-91aa-e296e3378161",
@@ -62,7 +67,8 @@
       "updatedAt": 1776855907208,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776855907208
     },
     {
       "id": "c35559e7-16b5-4eb7-a925-190471d92907",
@@ -71,7 +77,8 @@
       "updatedAt": 1776855949442,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776855949442
     },
     {
       "id": "c89791e5-608d-4773-b1df-4b593c5b55eb",
@@ -80,7 +87,8 @@
       "updatedAt": 1776856133417,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776856133417
     },
     {
       "id": "3322334f-eeb4-4f4a-9d30-706e139e1374",
@@ -89,7 +97,8 @@
       "updatedAt": 1776856340898,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776856340898
     },
     {
       "id": "ad06b8b7-f317-47f3-8cb4-8e2162d1606a",
@@ -98,7 +107,8 @@
       "updatedAt": 1776856376633,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776856376633
     },
     {
       "id": "db1159c0-f73e-4fcf-b735-da8177465c98",
@@ -107,7 +117,8 @@
       "updatedAt": 1776856741084,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776856741084
     },
     {
       "id": "8d17fa38-7e32-4a55-bc60-29b93d505c61",
@@ -116,7 +127,8 @@
       "updatedAt": 1776856812224,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776856812224
     },
     {
       "id": "77d0d804-cf67-475f-8373-b0def8c4757c",
@@ -125,7 +137,8 @@
       "updatedAt": 1776857022827,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776857022827
     },
     {
       "id": "b970d268-176c-4c96-9475-226f34f6d555",
@@ -134,25 +147,28 @@
       "updatedAt": 1776858158168,
       "parentId": null,
       "phase": "defining",
-      "reworkCount": 0
+      "reworkCount": 0,
+      "phaseEnteredAt": 1776858158168
     },
     {
       "id": "e609fe06-6dd3-4029-86c6-19755d1b5f23",
       "title": "intents should each have their own worktrees",
       "createdAt": 1776862953230,
-      "updatedAt": 1776862953230,
+      "updatedAt": 1777536545981,
       "parentId": null,
-      "phase": "defining",
-      "reworkCount": 0
+      "phase": "done",
+      "reworkCount": 0,
+      "phaseEnteredAt": 1777536545981
     },
     {
       "id": "5731f5dd-fdb4-4289-80bc-1ca01ede2a0f",
       "title": "GTFO extension that monitors tokens and tries to wrap thi...",
       "createdAt": 1776933399577,
-      "updatedAt": 1776933399577,
+      "updatedAt": 1777469469771,
       "parentId": null,
-      "phase": "defining",
-      "reworkCount": 0
+      "phase": "done",
+      "reworkCount": 0,
+      "phaseEnteredAt": 1777469469771
     },
     {
       "id": "0393e2ca-25ba-4311-8bdf-bed196743287",
@@ -161,7 +177,20 @@
       "updatedAt": 1776955468725,
       "parentId": null,
       "phase": "done",
-      "reworkCount": 4
+      "reworkCount": 4,
+      "phaseEnteredAt": 1776955468725
+    },
+    {
+      "id": "99f00b20-8017-48be-ada3-1e4b4c20957c",
+      "title": "Enhance intent list dialogue: colors, width, search",
+      "createdAt": 1777536956000,
+      "updatedAt": 1777542138165,
+      "parentId": null,
+      "phase": "reviewing",
+      "reworkCount": 0,
+      "worktreeBranch": "intent/enhance-intent-list-dialogue-colors-width-search-99f00b20",
+      "worktreePath": "/Users/daniel/.pi/repos/pi-codeslinger/enhance-intent-list-dialogue-colors-width-search-99f00b20",
+      "phaseEnteredAt": 1777542138165
     }
   ]
 }

@@ -44,7 +44,7 @@ describe("IntentOverlayComponent", () => {
       "/tmp/test",
     );
 
-    const lines = overlay.render();
+    const lines = overlay.render(80);
     const content = lines.join("\n");
 
     assert.ok(
@@ -64,7 +64,7 @@ describe("IntentOverlayComponent", () => {
       "/tmp/test",
     );
 
-    const lines = overlay.render();
+    const lines = overlay.render(80);
     const content = lines.join("\n");
 
     assert.ok(
@@ -103,7 +103,7 @@ describe("IntentOverlayComponent", () => {
     // Navigate to "Create new intent" and press Enter
     overlay.handleInput("\r");
 
-    const lines = overlay.render();
+    const lines = overlay.render(80);
     const content = lines.join("\n");
 
     assert.ok(
@@ -133,7 +133,7 @@ describe("IntentOverlayComponent", () => {
     overlay.handleInput("s");
     overlay.handleInput("t");
 
-    const lines = overlay.render();
+    const lines = overlay.render(80);
     const content = lines.join("\n");
 
     assert.ok(content.includes("Test"), "Should show typed text");
@@ -158,7 +158,7 @@ describe("IntentOverlayComponent", () => {
     overlay.handleInput("B");
     overlay.handleInput("\x7f"); // Backspace
 
-    const lines = overlay.render();
+    const lines = overlay.render(80);
     const content = lines.join("\n");
 
     assert.ok(content.includes("A"), "Should show 'A'");
@@ -188,7 +188,7 @@ describe("IntentOverlayComponent", () => {
     // Press enter to submit
     overlay.handleInput("\r");
 
-    const lines = overlay.render();
+    const lines = overlay.render(80);
     const content = lines.join("\n");
 
     assert.ok(content.includes("Generating"), "Should show generating state");
@@ -222,7 +222,7 @@ describe("IntentOverlayComponent", () => {
     overlay.handleInput("\x1b[B"); // Down arrow
     overlay.handleInput("\r"); // Enter
 
-    const lines = overlay.render();
+    const lines = overlay.render(80);
     const content = lines.join("\n");
 
     assert.ok(
@@ -245,7 +245,7 @@ describe("IntentOverlayComponent", () => {
     // Enter create mode
     overlay.handleInput("\r");
 
-    let lines = overlay.render();
+    let lines = overlay.render(80);
     let content = lines.join("\n");
     assert.ok(
       content.includes("Describe your intent"),
@@ -255,7 +255,7 @@ describe("IntentOverlayComponent", () => {
     // Press escape
     overlay.handleInput("\x1b");
 
-    lines = overlay.render();
+    lines = overlay.render(80);
     content = lines.join("\n");
     assert.ok(content.includes("Create new intent"), "Should be back in menu");
     assert.equal(result, null, "Should not call done");
@@ -281,7 +281,7 @@ describe("IntentOverlayComponent", () => {
     overlay.handleInput("\x1b[B"); // Down arrow
     overlay.handleInput("\r");
 
-    let lines = overlay.render();
+    let lines = overlay.render(80);
     let content = lines.join("\n");
     // In list mode, menu items shouldn't be shown
     assert.ok(
@@ -292,7 +292,7 @@ describe("IntentOverlayComponent", () => {
     // Press escape
     overlay.handleInput("\x1b");
 
-    lines = overlay.render();
+    lines = overlay.render(80);
     content = lines.join("\n");
     assert.ok(
       content.includes("Cancel"),
@@ -324,7 +324,7 @@ describe("IntentOverlayComponent", () => {
     // Select the first intent from the list
     overlay.handleInput("\r");
 
-    const lines = overlay.render();
+    const lines = overlay.render(80);
     const content = lines.join("\n");
 
     // In detail view, should show intent information
@@ -348,7 +348,7 @@ describe("IntentOverlayComponent", () => {
     // Down arrow should move selection
     overlay.handleInput("\x1b[B");
 
-    const lines = overlay.render();
+    const lines = overlay.render(80);
     const content = lines.join("\n");
 
     // Menu should still be rendered (we just changed selection)
@@ -357,7 +357,7 @@ describe("IntentOverlayComponent", () => {
     );
   });
 
-  test("overlay has correct width", () => {
+  test("overlay renders with dynamic width based on terminal columns", () => {
     let result: any = null;
     const overlay = new IntentOverlayComponent(
       emptyStore,
@@ -368,7 +368,32 @@ describe("IntentOverlayComponent", () => {
       "/tmp/test",
     );
 
-    assert.equal(overlay.width, 70, "Overlay width should be 70");
+    // Test min clamp (70)
+    let lines = overlay.render(50);
+    let firstLine = lines[0];
+    assert.equal(
+      firstLine.length,
+      70,
+      "Width should clamp to min 70 when terminal is 50",
+    );
+
+    // Test max clamp (120)
+    lines = overlay.render(150);
+    firstLine = lines[0];
+    assert.equal(
+      firstLine.length,
+      120,
+      "Width should clamp to max 120 when terminal is 150",
+    );
+
+    // Test normal range (90)
+    lines = overlay.render(90);
+    firstLine = lines[0];
+    assert.equal(
+      firstLine.length,
+      90,
+      "Width should be 90 when terminal is 90",
+    );
   });
 
   test("overlay is focusable", () => {
@@ -392,5 +417,201 @@ describe("IntentOverlayComponent", () => {
       "function",
       "Should have handleInput method",
     );
+  });
+});
+
+describe("IntentOverlayComponent - Search", () => {
+  test("search field appears at top of list view", () => {
+    const store: IntentStore = {
+      intents: [makeIntent({ title: "Test intent" })],
+    };
+
+    let result: any = null;
+    const overlay = new IntentOverlayComponent(
+      store,
+      mockTheme(),
+      (r) => {
+        result = r;
+      },
+      "/tmp/test",
+    );
+
+    // Navigate to list
+    overlay.handleInput("\x1b[B"); // Down to "List intents"
+    overlay.handleInput("\r"); // Enter
+
+    const lines = overlay.render(80);
+    const content = lines.join("\n");
+
+    assert.ok(content.includes("Search:"), "Should show search field");
+  });
+
+  test("typing in search field filters intents by title", () => {
+    const store: IntentStore = {
+      intents: [
+        makeIntent({ id: "id1", title: "Auth bug fix", phase: "done" }),
+        makeIntent({
+          id: "id2",
+          title: "Database migration",
+          phase: "implementing",
+        }),
+        makeIntent({ id: "id3", title: "Auth tests", phase: "defining" }),
+      ],
+    };
+
+    let result: any = null;
+    const overlay = new IntentOverlayComponent(
+      store,
+      mockTheme(),
+      (r) => {
+        result = r;
+      },
+      "/tmp/test",
+    );
+
+    // Navigate to list
+    overlay.handleInput("\x1b[B"); // Down to "List intents"
+    overlay.handleInput("\r"); // Enter
+
+    // Type "auth" in search
+    overlay.handleInput("a");
+    overlay.handleInput("u");
+    overlay.handleInput("t");
+    overlay.handleInput("h");
+
+    const lines = overlay.render(80);
+    const content = lines.join("\n");
+
+    assert.ok(
+      content.includes("Auth bug fix"),
+      "Should show first auth intent",
+    );
+    assert.ok(content.includes("Auth tests"), "Should show second auth intent");
+    assert.ok(
+      !content.includes("Database migration"),
+      "Should not show database intent",
+    );
+    assert.ok(content.includes("(2 results)"), "Should show result count");
+  });
+
+  test("search filters by phase name", () => {
+    const store: IntentStore = {
+      intents: [
+        makeIntent({ id: "id1", title: "First", phase: "done" }),
+        makeIntent({ id: "id2", title: "Second", phase: "implementing" }),
+        makeIntent({ id: "id3", title: "Third", phase: "defining" }),
+      ],
+    };
+
+    let result: any = null;
+    const overlay = new IntentOverlayComponent(
+      store,
+      mockTheme(),
+      (r) => {
+        result = r;
+      },
+      "/tmp/test",
+    );
+
+    // Navigate to list
+    overlay.handleInput("\x1b[B");
+    overlay.handleInput("\r");
+
+    // Type "done"
+    overlay.handleInput("d");
+    overlay.handleInput("o");
+    overlay.handleInput("n");
+    overlay.handleInput("e");
+
+    const lines = overlay.render(80);
+    const content = lines.join("\n");
+
+    assert.ok(content.includes("First"), "Should show done intent");
+    assert.ok(
+      !content.includes("Second"),
+      "Should not show implementing intent",
+    );
+    assert.ok(!content.includes("Third"), "Should not show defining intent");
+    assert.ok(
+      content.includes("(1 result)"),
+      "Should show singular result count",
+    );
+  });
+
+  test("escape clears search and shows all intents", () => {
+    const store: IntentStore = {
+      intents: [
+        makeIntent({ id: "id1", title: "Auth bug fix" }),
+        makeIntent({ id: "id2", title: "Database migration" }),
+      ],
+    };
+
+    let result: any = null;
+    const overlay = new IntentOverlayComponent(
+      store,
+      mockTheme(),
+      (r) => {
+        result = r;
+      },
+      "/tmp/test",
+    );
+
+    // Navigate to list and search
+    overlay.handleInput("\x1b[B");
+    overlay.handleInput("\r");
+    overlay.handleInput("a");
+    overlay.handleInput("u");
+    overlay.handleInput("t");
+    overlay.handleInput("h");
+
+    let lines = overlay.render(80);
+    let content = lines.join("\n");
+    assert.ok(
+      !content.includes("Database migration"),
+      "Database should be filtered",
+    );
+
+    // Press escape to clear
+    overlay.handleInput("\x1b");
+
+    lines = overlay.render(80);
+    content = lines.join("\n");
+    assert.ok(content.includes("Auth bug fix"), "Should show auth intent");
+    assert.ok(
+      content.includes("Database migration"),
+      "Should show database intent",
+    );
+    assert.ok(!content.includes("results"), "Should not show result count");
+  });
+
+  test("navigation works after search", () => {
+    const store: IntentStore = {
+      intents: [
+        makeIntent({ id: "id1", title: "First" }),
+        makeIntent({ id: "id2", title: "Second" }),
+      ],
+    };
+
+    let result: any = null;
+    const overlay = new IntentOverlayComponent(
+      store,
+      mockTheme(),
+      (r) => {
+        result = r;
+      },
+      "/tmp/test",
+    );
+
+    // Navigate to list, clear search, move to list items
+    overlay.handleInput("\x1b[B");
+    overlay.handleInput("\r");
+    overlay.handleInput("\x1b"); // Escape to clear search
+    overlay.handleInput("\x1b[B"); // Down to first item
+
+    const lines = overlay.render(80);
+    const content = lines.join("\n");
+
+    // Selection indicator should be on one of the items
+    assert.ok(content.includes("▶"), "Should show selection indicator");
   });
 });

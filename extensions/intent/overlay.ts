@@ -4,7 +4,7 @@
  * Provides a popup dialog for creating and switching intents.
  */
 import { matchesKey, visibleWidth, type Focusable } from "@mariozechner/pi-tui";
-import type { Theme } from "@mariozechner/pi-coding-agent";
+import type { Theme, ThemeColor } from "@mariozechner/pi-coding-agent";
 import type { IntentStore, Intent, IntentPhase } from "./store.ts";
 import {
   loadIntentContent,
@@ -36,6 +36,10 @@ interface CreateState {
 interface ListState {
   mode: "list";
   selected: number;
+  searchText: string;
+  searchCursor: number;
+  searchFocused: boolean; // true = editing search, false = navigating list
+  filteredIntents: Intent[]; // pre-computed filtered list
 }
 
 interface DetailState {
@@ -65,8 +69,29 @@ type OverlayState =
   | GeneratingState;
 
 export class IntentOverlayComponent implements Focusable {
-  readonly width = 70;
   focused = false;
+
+  /**
+   * Map intent phase to theme color name for visual coding.
+   */
+  private phaseColor(phase: IntentPhase): ThemeColor {
+    switch (phase) {
+      case "done":
+        return "success";
+      case "implementing":
+        return "warning";
+      case "defining":
+        return "mdLink"; // blue
+      case "reviewing":
+        return "toolDiffAdded"; // cyan-ish
+      case "proposed-ready":
+        return "success";
+      case "blocked-on-child":
+        return "dim";
+      default:
+        return "text";
+    }
+  }
 
   private state: OverlayState;
   private menuItems: string[] = [];
@@ -75,6 +100,8 @@ export class IntentOverlayComponent implements Focusable {
   private store: IntentStore;
   private theme: Theme;
   private done: (result: OverlayAction) => void;
+  private descriptionCache: Map<string, string> = new Map(); // intent.id -> description content
+  private activeIntentId: string | null; // cached active intent ID
 
   constructor(
     store: IntentStore,
@@ -86,11 +113,14 @@ export class IntentOverlayComponent implements Focusable {
     this.theme = theme;
     this.done = done;
     this.cwd = cwd;
+
+    // Cache active intent ID (read once)
+    this.activeIntentId = readActiveIntent(cwd);
+
     // Build menu items - include actions for active intent directly in menu
     this.menuItems = [];
 
-    const activeIntentId = readActiveIntent(cwd);
-    const active = store.intents.find((i) => i.id === activeIntentId);
+    const active = store.intents.find((i) => i.id === this.activeIntentId);
     if (active) {
       // Add phase-specific actions for active intent
       const actions = this.getAvailableActions(active);
@@ -120,12 +150,25 @@ export class IntentOverlayComponent implements Focusable {
         return;
       } else if (this.state.mode === "detail") {
         // Go back to list
-        this.state = { mode: "list", selected: 0 };
+        this.state = {
+          mode: "list",
+          selected: 0,
+          searchText: "",
+          searchCursor: 0,
+          searchFocused: true,
+          filteredIntents: this.store.intents,
+        };
+      } else if (this.state.mode === "list") {
+        // Let handleListInput handle escape (may clear search or go back)
+        // Don't return yet - pass through to handleListInput
       } else {
         // Go back to menu
         this.state = { mode: "menu", selected: 0 };
       }
-      return;
+
+      if (this.state.mode !== "list") {
+        return;
+      }
     }
 
     if (this.state.mode === "menu") {
@@ -143,12 +186,22 @@ export class IntentOverlayComponent implements Focusable {
     if (this.state.mode !== "menu") return;
 
     if (matchesKey(data, "up")) {
-      this.state.selected = Math.max(0, this.state.selected - 1);
+      let newIndex = this.state.selected - 1;
+      // Skip separator lines
+      while (newIndex >= 0 && this.menuItems[newIndex].startsWith("─")) {
+        newIndex--;
+      }
+      this.state.selected = Math.max(0, newIndex);
     } else if (matchesKey(data, "down")) {
-      this.state.selected = Math.min(
-        this.menuItems.length - 1,
-        this.state.selected + 1,
-      );
+      let newIndex = this.state.selected + 1;
+      // Skip separator lines
+      while (
+        newIndex < this.menuItems.length &&
+        this.menuItems[newIndex].startsWith("─")
+      ) {
+        newIndex++;
+      }
+      this.state.selected = Math.min(this.menuItems.length - 1, newIndex);
     } else if (matchesKey(data, "return")) {
       const selected = this.menuItems[this.state.selected];
 
@@ -161,13 +214,20 @@ export class IntentOverlayComponent implements Focusable {
       if (selected === "Create new intent") {
         this.state = { mode: "create", text: "", cursor: 0, scroll: 0 };
       } else if (selected === "List intents") {
-        this.state = { mode: "list", selected: 0 };
+        this.state = {
+          mode: "list",
+          selected: 0,
+          searchText: "",
+          searchCursor: 0,
+          searchFocused: true,
+          filteredIntents: this.store.intents,
+        };
       } else if (selected === "Cancel") {
         this.done({ type: "cancel" });
       } else {
         // Must be an action for the active intent
         const active = this.store.intents.find(
-          (i) => i.id === readActiveIntent(this.cwd),
+          (i) => i.id === this.activeIntentId,
         );
         if (active) {
           this.executeAction(selected, active);
@@ -234,27 +294,88 @@ export class IntentOverlayComponent implements Focusable {
   private handleListInput(data: string): void {
     if (this.state.mode !== "list") return;
 
-    const intents = this.store.intents;
-    if (intents.length === 0) {
+    if (this.store.intents.length === 0) {
       this.state = { mode: "menu", selected: 0 };
       return;
     }
 
+    // Escape: clear search if text present, else go back to menu
+    if (matchesKey(data, "escape")) {
+      if (this.state.searchText) {
+        // Clear search
+        this.state.searchText = "";
+        this.state.searchCursor = 0;
+        this.state.searchFocused = true; // Keep in search field
+        this.state.selected = 0;
+        this.state.filteredIntents = this.store.intents; // Reset to all intents
+        return;
+      }
+      // No search text - go back to menu
+      this.state = { mode: "menu", selected: 0 };
+      return;
+    }
+
+    // If search focused, handle text input
+    if (this.state.searchFocused) {
+      if (matchesKey(data, "backspace")) {
+        if (this.state.searchCursor > 0) {
+          this.state.searchText =
+            this.state.searchText.slice(0, this.state.searchCursor - 1) +
+            this.state.searchText.slice(this.state.searchCursor);
+          this.state.searchCursor--;
+          this.state.selected = 0;
+          // Recompute filtered list
+          this.state.filteredIntents = this.computeFilteredIntents(
+            this.state.searchText,
+          );
+        }
+      } else if (matchesKey(data, "left")) {
+        this.state.searchCursor = Math.max(0, this.state.searchCursor - 1);
+      } else if (matchesKey(data, "right")) {
+        this.state.searchCursor = Math.min(
+          this.state.searchText.length,
+          this.state.searchCursor + 1,
+        );
+      } else if (matchesKey(data, "down")) {
+        // Move focus to list
+        this.state.searchFocused = false;
+      } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        // Type character
+        this.state.searchText =
+          this.state.searchText.slice(0, this.state.searchCursor) +
+          data +
+          this.state.searchText.slice(this.state.searchCursor);
+        this.state.searchCursor++;
+        this.state.selected = 0;
+        // Recompute filtered list
+        this.state.filteredIntents = this.computeFilteredIntents(
+          this.state.searchText,
+        );
+      }
+      return;
+    }
+
+    // List navigation (when search not focused)
     if (matchesKey(data, "up")) {
-      this.state.selected = Math.max(0, this.state.selected - 1);
+      if (this.state.selected === 0) {
+        // Move focus back to search
+        this.state.searchFocused = true;
+      } else {
+        this.state.selected = Math.max(0, this.state.selected - 1);
+      }
     } else if (matchesKey(data, "down")) {
       this.state.selected = Math.min(
-        intents.length - 1,
+        this.state.filteredIntents.length - 1,
         this.state.selected + 1,
       );
     } else if (matchesKey(data, "return")) {
-      const intent = intents[this.state.selected];
+      const intent = this.state.filteredIntents[this.state.selected];
       if (intent) {
         this.done({ type: "switch", intentId: intent.id });
       }
     } else if (data === "d" || data === " ") {
       // Show detail view
-      const intent = intents[this.state.selected];
+      const intent = this.state.filteredIntents[this.state.selected];
       if (intent) {
         this.state = {
           mode: "detail",
@@ -264,6 +385,9 @@ export class IntentOverlayComponent implements Focusable {
           selectedAction: 0,
         };
       }
+    } else if (data === "/") {
+      // Quick search activation
+      this.state.searchFocused = true;
     }
   }
 
@@ -283,6 +407,74 @@ export class IntentOverlayComponent implements Focusable {
       // If title generation fails, fall back to no title (will be generated later)
       this.done({ type: "create", description });
     }
+  }
+
+  /**
+   * Filter and sort intents based on search text.
+   * Priority: title matches > phase matches > description matches
+   * Within each priority, maintain original order.
+   *
+   * Results are cached and reused until search text changes.
+   */
+  /**
+   * Compute filtered intents based on search text.
+   * Pure function - no side effects, no state access.
+   */
+  private computeFilteredIntents(searchText: string): Intent[] {
+    const search = searchText.toLowerCase().trim();
+
+    if (!search) {
+      return this.store.intents;
+    }
+
+    interface ScoredIntent {
+      intent: Intent;
+      score: number;
+      originalIndex: number;
+    }
+
+    const scored: ScoredIntent[] = this.store.intents.map((intent, idx) => {
+      let score = 0;
+
+      // Title match = 3 points
+      if (intent.title.toLowerCase().includes(search)) {
+        score = 3;
+      }
+      // Phase match = 2 points
+      else if (intent.phase.toLowerCase().includes(search)) {
+        score = 2;
+      }
+      // Description match = 1 point (only for longer searches to avoid I/O lag)
+      else if (search.length >= 3) {
+        try {
+          // Check cache first
+          let content = this.descriptionCache.get(intent.id);
+          if (content === undefined) {
+            // Cache miss - load and store
+            content = loadIntentContent(this.cwd, intent.id) || "";
+            this.descriptionCache.set(intent.id, content);
+          }
+          if (content && content.toLowerCase().includes(search)) {
+            score = 1;
+          }
+        } catch {
+          // Ignore if can't load
+        }
+      }
+
+      return { intent, score, originalIndex: idx };
+    });
+
+    // Filter out non-matches, sort by score desc then original order
+    const result = scored
+      .filter((s) => s.score > 0)
+      .sort((a, b) => {
+        if (a.score !== b.score) return b.score - a.score;
+        return a.originalIndex - b.originalIndex;
+      })
+      .map((s) => s.intent);
+
+    return result;
   }
 
   private handleDetailInput(data: string): void {
@@ -336,7 +528,7 @@ export class IntentOverlayComponent implements Focusable {
     const actions: string[] = [];
 
     // Always allow switching if not active
-    if (intent.id !== readActiveIntent(this.cwd)) {
+    if (intent.id !== this.activeIntentId) {
       actions.push("Switch to this intent");
     }
 
@@ -391,8 +583,9 @@ export class IntentOverlayComponent implements Focusable {
     }
   }
 
-  render(_width: number): string[] {
-    const w = this.width;
+  render(terminalWidth: number): string[] {
+    // Dynamic width: clamp between 70 and 120, based on terminal columns
+    const w = Math.min(120, Math.max(70, terminalWidth));
     const th = this.theme;
     const innerW = w - 2;
     const lines: string[] = [];
@@ -421,11 +614,11 @@ export class IntentOverlayComponent implements Focusable {
     if (this.state.mode === "menu") {
       this.renderMenu(lines, row);
     } else if (this.state.mode === "create") {
-      this.renderCreate(lines, row);
+      this.renderCreate(lines, row, w);
     } else if (this.state.mode === "list") {
       this.renderList(lines, row);
     } else if (this.state.mode === "detail") {
-      this.renderDetail(lines, row);
+      this.renderDetail(lines, row, w);
     } else if (this.state.mode === "generating") {
       this.renderGenerating(lines, row);
     }
@@ -462,14 +655,18 @@ export class IntentOverlayComponent implements Focusable {
     );
   }
 
-  private renderCreate(lines: string[], row: (s: string) => string): void {
+  private renderCreate(
+    lines: string[],
+    row: (s: string) => string,
+    width: number,
+  ): void {
     if (this.state.mode !== "create") return;
 
     lines.push(row(` ${this.theme.fg("muted", "Describe your intent:")}`));
     lines.push(row(""));
 
     // Calculate visible window for text (width - padding - borders)
-    const maxWidth = this.width - 6;
+    const maxWidth = width - 6;
     const text = this.state.text;
 
     if (text) {
@@ -565,39 +762,67 @@ export class IntentOverlayComponent implements Focusable {
   private renderList(lines: string[], row: (s: string) => string): void {
     if (this.state.mode !== "list") return;
 
-    const intents = this.store.intents;
+    const allIntents = this.store.intents;
 
-    if (intents.length === 0) {
+    if (allIntents.length === 0) {
       lines.push(row(` ${this.theme.fg("dim", "No intents yet")}`));
       lines.push(row(""));
       lines.push(row(` ${this.theme.fg("dim", "Esc to go back")}`));
       return;
     }
 
-    // Show each intent with phase and active marker
-    for (let i = 0; i < intents.length; i++) {
-      const intent = intents[i];
-      const isSelected = i === this.state.selected;
-      const isActive = intent.id === readActiveIntent(this.cwd);
+    // Render search field
+    const searchText = this.state.searchText;
+    const searchCursor = this.state.searchCursor;
+    const filteredIntents = this.state.filteredIntents;
+    const resultCount = searchText
+      ? ` (${filteredIntents.length} result${filteredIntents.length === 1 ? "" : "s"})`
+      : "";
+
+    // Show search input with cursor
+    let searchDisplay = "";
+    if (this.state.searchFocused) {
+      const before = searchText.slice(0, searchCursor);
+      const cursorChar =
+        searchCursor < searchText.length ? searchText[searchCursor] : " ";
+      const after = searchText.slice(searchCursor + 1);
+      searchDisplay = `Search: ${before}\x1b[7m${cursorChar}\x1b[27m${after}${resultCount}`;
+    } else {
+      searchDisplay = `Search: ${searchText}${resultCount}`;
+    }
+
+    lines.push(
+      row(
+        ` ${this.theme.fg(this.state.searchFocused ? "accent" : "muted", searchDisplay)}`,
+      ),
+    );
+    lines.push(row(""));
+
+    // Show filtered intents with phase and active marker
+    for (let i = 0; i < filteredIntents.length; i++) {
+      const intent = filteredIntents[i];
+      const isSelected = i === this.state.selected && !this.state.searchFocused;
+      const isActive = intent.id === this.activeIntentId;
       const prefix = isSelected ? " ▶ " : "   ";
 
       // Format: Title [PHASE] [ACTIVE]
       const phaseLabel = `[${intent.phase.toUpperCase()}]`;
       const activeLabel = isActive ? " [ACTIVE]" : "";
-      const fullText = `${intent.title} ${this.theme.fg("dim", phaseLabel)}${activeLabel}`;
+      const coloredPhase = this.theme.fg(
+        this.phaseColor(intent.phase),
+        phaseLabel,
+      );
+      const fullText = `${intent.title} ${coloredPhase}${activeLabel}`;
 
-      const text = isSelected
-        ? this.theme.fg("accent", fullText)
-        : this.theme.fg("text", fullText);
+      const text = isSelected ? this.theme.fg("accent", fullText) : fullText;
       lines.push(row(prefix + text));
     }
 
     lines.push(row(""));
-    lines.push(
-      row(
-        ` ${this.theme.fg("dim", "↑↓ navigate • d/Space details • Enter switch • Esc back")}`,
-      ),
-    );
+    const hint = this.state.searchFocused
+      ? "type to search • ↓ list • Esc clear"
+      : "↑↓ navigate • / search • d/Space details • Enter switch • Esc back";
+    lines.push(row(` ${this.theme.fg("dim", hint)}`));
   }
 
   private renderGenerating(lines: string[], row: (s: string) => string): void {
@@ -609,7 +834,11 @@ export class IntentOverlayComponent implements Focusable {
     lines.push(row(""));
   }
 
-  private renderDetail(lines: string[], row: (s: string) => string): void {
+  private renderDetail(
+    lines: string[],
+    row: (s: string) => string,
+    width: number,
+  ): void {
     if (this.state.mode !== "detail") return;
 
     const detailState = this.state as DetailState;
@@ -624,7 +853,7 @@ export class IntentOverlayComponent implements Focusable {
 
     // Build all content lines first, then window them for scrolling
     const allLines: string[] = [];
-    const isActive = intent.id === readActiveIntent(this.cwd);
+    const isActive = intent.id === this.activeIntentId;
     const activeLabel = isActive ? " [ACTIVE]" : "";
 
     // Header: Title and status
@@ -632,7 +861,7 @@ export class IntentOverlayComponent implements Focusable {
       ` ${this.theme.fg("accent", this.theme.bold(intent.title + activeLabel))}`,
     );
     allLines.push(
-      ` ${this.theme.fg("dim", `Phase: ${intent.phase.toUpperCase()}`)}`,
+      ` Phase: ${this.theme.fg(this.phaseColor(intent.phase), intent.phase.toUpperCase())}`,
     );
     allLines.push(
       ` ${this.theme.fg("dim", `Rework count: ${intent.reworkCount}`)}`,
@@ -675,7 +904,7 @@ export class IntentOverlayComponent implements Focusable {
         // Word wrap and add description lines
         for (const line of descLines.slice(0, 5)) {
           // Limit to first 5 lines
-          const wrapped = this.wordWrap(line.trim(), this.width - 6);
+          const wrapped = this.wordWrap(line.trim(), width - 6);
           for (const wl of wrapped) {
             allLines.push(` ${this.theme.fg("text", wl)}`);
           }
@@ -699,7 +928,7 @@ export class IntentOverlayComponent implements Focusable {
         // Show first few lines of understanding
         const lines = understanding.split("\n").filter((l) => l.trim());
         for (const line of lines.slice(0, 8)) {
-          const wrapped = this.wordWrap(line.trim(), this.width - 6);
+          const wrapped = this.wordWrap(line.trim(), width - 6);
           for (const wl of wrapped) {
             allLines.push(` ${this.theme.fg("text", wl)}`);
           }
