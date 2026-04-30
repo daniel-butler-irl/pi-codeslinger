@@ -2,6 +2,18 @@
 
 Contributor guidance for extension implementers — not end users.
 
+## Local development setup
+
+After cloning, run these once to wire up dependencies and git hooks:
+
+```bash
+npm install
+pre-commit install --hook-type pre-commit --hook-type post-merge --hook-type post-checkout
+```
+
+The `post-merge` and `post-checkout` hooks automatically re-run `npm install`
+when `package-lock.json` changes, keeping `node_modules` in sync after pulls.
+
 ## Tool exposure rule
 
 When implementers add new tools to an extension, also add programmatic access where applicable.
