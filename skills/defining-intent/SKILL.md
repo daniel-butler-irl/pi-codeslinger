@@ -1,6 +1,6 @@
 ---
 name: defining-intent
-description: Use when a user wants to create or refine an intent's Description, Success Criteria, or Verification section, or when an intent is vague, unmeasurable, or cannot be verified without consulting an AI.
+description: Use when a user wants to create or refine an intent's Description, Success Criteria, or Verification section, or when an intent is vague, unmeasurable, or cannot be verified without consulting an AI, or when the user says "lock," "finalize," "freeze," "ready to start," "fill in success criteria/verification," or asks what is missing on an intent.
 ---
 
 # Defining an intent
@@ -11,6 +11,39 @@ changed and what "done" looks like. A vague intent produces vague work.
 Your job during defining is to help the user write a contract that is
 **specific**, **outcome-oriented**, and **independently verifiable**. Not
 to write code yet. Not to start work.
+
+## Tools available in this phase
+
+| Tool | When to call |
+| --- | --- |
+| `read_intent` | First action. Inspect the current contract to see which sections are empty or weak. |
+| `write_intent_contract` | The only correct way to write `Description`, `Success Criteria`, or `Verification` into `intent.md`. Resolves the main-repo path; refuses if phase ≠ defining. |
+| `lock_intent` | Validates the contract and transitions to `implementing`. Returns `{ok: false, missing: string[]}` if sections are incomplete, `{ok: true, phase, worktreePath}` on success. |
+| `update_understanding` | Sidebar memory only — running notes about the conversation. Does **not** write `intent.md`. |
+
+### Understanding vs. Contract — do not confuse them
+
+- **Understanding** is sidebar memory written via `update_understanding`. It captures the conversation: open questions, next steps, decisions you have not yet committed to the contract. Cheap to update. Not authoritative.
+- **Contract** is `intent.md`: Description, Success Criteria, Verification. Written via `write_intent_contract`. Authoritative. Frozen by `lock_intent`.
+
+> **Warning:** Do **not** use generic `Edit` or `Write` on `intent.md`. The
+> lock-edit guard will block the call. Even if you think you found a path
+> that works (e.g., the worktree copy), you will silently desync from the
+> main-repo source-of-truth. Always go through `write_intent_contract`.
+
+## The lock loop
+
+When the user says "lock" / "finalize" / "ready to start":
+
+1. `read_intent` — see what's already filled in.
+2. Identify missing or weak sections (Description, Success Criteria, Verification).
+3. For each, ask the user for content. Do not invent it.
+4. `write_intent_contract` with the sections you collected.
+5. `lock_intent`.
+6. On `{ok: false, missing: [...]}`, loop back to step 3 for the listed sections.
+7. On `{ok: true, worktreePath}`, confirm the worktree path with the user.
+
+If you find yourself reading `store.ts`, `paths.ts`, or `worktree-manager.ts` to "figure out how to make the lock work," stop. The tools above are the only correct surface.
 
 ## Session Understanding
 

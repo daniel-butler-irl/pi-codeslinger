@@ -13,6 +13,23 @@ the extension with a clear error. If you believe the contract is wrong,
 stop and call `ask_orchestrator` with the specific conflict — do not
 try to work around the lock.
 
+> **If a tool refuses an edit to `intent.md` (lock-edit guard), do NOT
+> investigate `store.ts`, `paths.ts`, or `worktree-manager.ts` to find a
+> bypass.** The guard is correct. Call `ask_orchestrator` with the specific
+> conflict and wait.
+
+## Tools available in this phase
+
+| Tool | When to call |
+| --- | --- |
+| `read_intent` | Read the locked contract before doing anything else, and any time you need to re-check a criterion. |
+| `read_intent_log` | Read prior decisions/discoveries from earlier sessions on this intent. |
+| `read_verification_results` | Inspect the latest verification.json (pass/fail per command). |
+| `update_understanding` | Sidebar memory — record problem, current state, next steps, open questions. Update as your understanding evolves. |
+| `propose_done` | Submit work for adversarial review. Requires verification passing and concrete artefacts. |
+| `ask_orchestrator` | Use when the contract conflicts with reality, or when blocked. Do not guess — ask. |
+| `spawn_child_intent` | Use when you discover a prerequisite that must be its own contract before this one can finish. |
+
 ## Session Understanding
 
 When you start a session with an active intent, you will receive an
