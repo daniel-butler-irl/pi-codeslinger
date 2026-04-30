@@ -302,7 +302,13 @@ export default function (pi: ExtensionAPI) {
       // For agent-driven phases, show a visible "new session" indicator so
       // the user can see the context has been cleared and a fresh run is starting.
       // Then auto-dispatch so the agent picks up exactly where it left off.
-      if (active.phase === "implementing" || active.phase === "reviewing") {
+      // Guard: pi also fires session_start on hot-reload without clearing context.
+      // Non-empty entries mean the LLM is still in the same session window.
+      const priorEntries = (ctx as any).sessionManager?.getEntries?.() ?? [];
+      if (
+        priorEntries.length === 0 &&
+        (active.phase === "implementing" || active.phase === "reviewing")
+      ) {
         const phaseLabel =
           active.phase === "implementing"
             ? `implementing${active.reworkCount > 0 ? ` (rework #${active.reworkCount})` : ""}`
@@ -479,7 +485,8 @@ export default function (pi: ExtensionAPI) {
     const isContractPath =
       store.intents.some(
         (i) => normalize(intentContractPath(cwdRef, i.id)) === absolutePath,
-      ) || /[\\/]\.pi[\\/]intents[\\/][^\\/]+[\\/]intent\.md$/.test(absolutePath);
+      ) ||
+      /[\\/]\.pi[\\/]intents[\\/][^\\/]+[\\/]intent\.md$/.test(absolutePath);
 
     if (!isContractPath) return;
 

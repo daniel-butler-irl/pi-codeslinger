@@ -1,6 +1,13 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  realpathSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -9,7 +16,12 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import { createIntent, loadStore, saveStore, saveIntentContent } from "./store.ts";
+import {
+  createIntent,
+  loadStore,
+  saveStore,
+  saveIntentContent,
+} from "./store.ts";
 import { readActiveIntent } from "./active-local.ts";
 
 function withTempDir(fn: (cwd: string) => Promise<void> | void) {
@@ -41,22 +53,13 @@ async function loadIntentExtension() {
       "./done-flow.js",
       new URL("./done-flow.ts", import.meta.url).href,
     )
-    .replaceAll(
-      "./paths.js",
-      new URL("./paths.ts", import.meta.url).href,
-    )
+    .replaceAll("./paths.js", new URL("./paths.ts", import.meta.url).href)
     .replaceAll(
       "./active-local.js",
       new URL("./active-local.ts", import.meta.url).href,
     )
-    .replaceAll(
-      "./lock.js",
-      new URL("./lock.ts", import.meta.url).href,
-    )
-    .replaceAll(
-      "./tools.js",
-      new URL("./tools.ts", import.meta.url).href,
-    )
+    .replaceAll("./lock.js", new URL("./lock.ts", import.meta.url).href)
+    .replaceAll("./tools.js", new URL("./tools.ts", import.meta.url).href)
     .replaceAll(
       "../orchestrator/agent-overlay.js",
       new URL("../orchestrator/agent-overlay.ts", import.meta.url).href,
@@ -273,7 +276,15 @@ async function createTransitionHarness(cwd: string) {
     await handler(args, ctx);
   }
 
-  return { tools, handlers, commands, shortcuts, emittedEvents, runEvent, runCommand };
+  return {
+    tools,
+    handlers,
+    commands,
+    shortcuts,
+    emittedEvents,
+    runEvent,
+    runCommand,
+  };
 }
 
 describe("Gap 8 — auto-switch active on transition to implementing", () => {
@@ -314,7 +325,9 @@ describe("Gap 8 — auto-switch active on transition to implementing", () => {
               toPhase: "implementing",
             });
           },
-          editor() { return Promise.resolve(undefined); },
+          editor() {
+            return Promise.resolve(undefined);
+          },
         },
         newSession() {
           newSessionCalled = true;
@@ -328,13 +341,19 @@ describe("Gap 8 — auto-switch active on transition to implementing", () => {
       assert.equal(newSessionCalled, true, "newSession should be called");
 
       const activeAfter = readActiveIntent(dir);
-      assert.equal(activeAfter, intent.id, "active intent should be flipped to transitioned intent");
+      assert.equal(
+        activeAfter,
+        intent.id,
+        "active intent should be flipped to transitioned intent",
+      );
 
       const activeChangedEvents = harness.emittedEvents.filter(
         (e) => e.event === "intent:active-changed",
       );
       assert.ok(
-        activeChangedEvents.some((e: any) => (e.payload as any).id === intent.id),
+        activeChangedEvents.some(
+          (e: any) => (e.payload as any).id === intent.id,
+        ),
         "intent:active-changed event should be emitted",
       );
     } finally {
@@ -382,7 +401,9 @@ describe("Gap 8 — auto-switch active on transition to implementing", () => {
               toPhase: "implementing",
             });
           },
-          editor() { return Promise.resolve(undefined); },
+          editor() {
+            return Promise.resolve(undefined);
+          },
         },
         // no newSession property
       };
@@ -391,7 +412,11 @@ describe("Gap 8 — auto-switch active on transition to implementing", () => {
       await harness.runCommand("intent", "", eventCtx);
 
       const activeAfter = readActiveIntent(dir);
-      assert.equal(activeAfter, intent.id, "active intent should still be flipped");
+      assert.equal(
+        activeAfter,
+        intent.id,
+        "active intent should still be flipped",
+      );
 
       const notifyMsg = notifications.find((n) => n.msg.includes("manually"));
       assert.ok(notifyMsg, "user should be notified to switch manually");
@@ -400,7 +425,9 @@ describe("Gap 8 — auto-switch active on transition to implementing", () => {
         (e) => e.event === "intent:active-changed",
       );
       assert.ok(
-        activeChangedEvents.some((e: any) => (e.payload as any).id === intent.id),
+        activeChangedEvents.some(
+          (e: any) => (e.payload as any).id === intent.id,
+        ),
         "intent:active-changed event should be emitted even without newSession",
       );
     } finally {
@@ -448,7 +475,9 @@ describe("Gap 8 — auto-switch active on transition to implementing", () => {
               toPhase: "implementing",
             });
           },
-          editor() { return Promise.resolve(undefined); },
+          editor() {
+            return Promise.resolve(undefined);
+          },
         },
         newSession() {
           newSessionCalled = true;
@@ -457,20 +486,120 @@ describe("Gap 8 — auto-switch active on transition to implementing", () => {
       };
 
       // Pre-set the intent as active before session_start
-      const { writeActiveIntent: writeActive } = await import("./active-local.ts");
+      const { writeActiveIntent: writeActive } =
+        await import("./active-local.ts");
       writeActive(dir, intent.id);
 
       await harness.runEvent("session_start", {}, commandCtx);
       await harness.runCommand("intent", "", commandCtx);
 
-      assert.equal(newSessionCalled, true, "newSession should still be called for already-active intent");
+      assert.equal(
+        newSessionCalled,
+        true,
+        "newSession should still be called for already-active intent",
+      );
 
       const activeAfter = readActiveIntent(dir);
-      assert.equal(activeAfter, intent.id, "active intent should remain the same");
+      assert.equal(
+        activeAfter,
+        intent.id,
+        "active intent should remain the same",
+      );
     } finally {
       process.chdir(originalCwd);
       delete process.env.PI_WORKTREE_BASE;
       rmSync(wtBase, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+});
+
+describe("session-start-notice suppressed on hot-reload", () => {
+  async function makeNoticeHarness(cwd: string) {
+    const handlers = new Map<string, Function[]>();
+    const sentMessages: any[] = [];
+    const api = {
+      on(event: string, handler: Function) {
+        const list = handlers.get(event) ?? [];
+        list.push(handler);
+        handlers.set(event, list);
+      },
+      registerTool() {},
+      registerShortcut() {},
+      registerCommand() {},
+      sendMessage(msg: any) {
+        sentMessages.push(msg);
+      },
+      events: { on() {}, emit() {} },
+    } as any;
+    const { default: intentExtension } = await loadIntentExtension();
+    intentExtension(api);
+    async function runSessionStart(sessionEntries: any[]) {
+      const ctx = {
+        cwd,
+        hasUI: false,
+        ui: { notify() {}, custom() {} },
+        sessionManager: {
+          getEntries() {
+            return sessionEntries;
+          },
+        },
+      };
+      for (const handler of handlers.get("session_start") ?? []) {
+        await handler({}, ctx);
+      }
+    }
+    return { runSessionStart, sentMessages };
+  }
+
+  test("does not send notice when sessionManager has prior entries (reload)", async () => {
+    const { dir, cleanup } = initGitRepo();
+    try {
+      const store = loadStore(dir);
+      const intent = createIntent(store, dir, "reload test");
+      saveIntentContent(dir, intent.id, VALID_INTENT_CONTENT);
+      const { transitionPhase } = await import("./store.ts");
+      transitionPhase(store, intent.id, "implementing");
+      await saveStore(dir, store);
+      const { writeActiveIntent } = await import("./active-local.ts");
+      writeActiveIntent(dir, intent.id);
+
+      const { runSessionStart, sentMessages } = await makeNoticeHarness(dir);
+      await runSessionStart([{ type: "assistant", content: "prior turn" }]);
+
+      const notices = sentMessages.filter(
+        (m) => m?.customType === "session-start-notice",
+      );
+      assert.equal(notices.length, 0, "notice must not be sent on hot-reload");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("sends notice when sessionManager has no prior entries (genuine new session)", async () => {
+    const { dir, cleanup } = initGitRepo();
+    try {
+      const store = loadStore(dir);
+      const intent = createIntent(store, dir, "fresh session test");
+      saveIntentContent(dir, intent.id, VALID_INTENT_CONTENT);
+      const { transitionPhase } = await import("./store.ts");
+      transitionPhase(store, intent.id, "implementing");
+      await saveStore(dir, store);
+      const { writeActiveIntent } = await import("./active-local.ts");
+      writeActiveIntent(dir, intent.id);
+
+      const { runSessionStart, sentMessages } = await makeNoticeHarness(dir);
+      await runSessionStart([]);
+
+      const notices = sentMessages.filter(
+        (m) => m?.customType === "session-start-notice",
+      );
+      assert.equal(
+        notices.length,
+        1,
+        "notice must be sent on genuine fresh session",
+      );
+    } finally {
       cleanup();
     }
   });
@@ -513,7 +642,8 @@ describe("Gap 3 — propose_done blocks on stale or missing understanding.md", (
       const store = loadStore(dir);
       const intent = createIntent(store, dir, "test");
       saveIntentContent(dir, intent.id, VALID_INTENT_CONTENT);
-      const { transitionPhase, writeUnderstanding } = await import("./store.ts");
+      const { transitionPhase, writeUnderstanding } =
+        await import("./store.ts");
       transitionPhase(store, intent.id, "implementing");
       await saveStore(dir, store);
       writeUnderstanding(dir, intent.id, "   \n  ");
@@ -579,10 +709,15 @@ describe("Gap 3 — propose_done blocks on stale or missing understanding.md", (
       const store = loadStore(dir);
       const intent = createIntent(store, dir, "test");
       saveIntentContent(dir, intent.id, VALID_INTENT_CONTENT);
-      const { transitionPhase, writeUnderstanding } = await import("./store.ts");
+      const { transitionPhase, writeUnderstanding } =
+        await import("./store.ts");
       transitionPhase(store, intent.id, "implementing");
       await saveStore(dir, store);
-      writeUnderstanding(dir, intent.id, "Current state: foo done, bar pending.");
+      writeUnderstanding(
+        dir,
+        intent.id,
+        "Current state: foo done, bar pending.",
+      );
       const { writeActiveIntent } = await import("./active-local.ts");
       writeActiveIntent(dir, intent.id);
 
@@ -590,8 +725,8 @@ describe("Gap 3 — propose_done blocks on stale or missing understanding.md", (
       await harness.runEvent("session_start");
 
       let signalEmitted = false;
-      (harness.tools as any); // unused
-      const apiAny = (harness as any);
+      harness.tools as any; // unused
+      const apiAny = harness as any;
       // Tap the events bus from the harness via reflection: use the
       // same eventHandlers map by re-registering our own listener via
       // ctx-less api access. Instead, just verify isError=false.
@@ -724,10 +859,7 @@ describe("write_intent_contract tool", () => {
         pathReal.startsWith(dirReal),
         `expected main-repo path under ${dirReal}, got ${pathReal}`,
       );
-      assert.ok(
-        !pathReal.startsWith(wtReal),
-        "must not write into worktree",
-      );
+      assert.ok(!pathReal.startsWith(wtReal), "must not write into worktree");
 
       // The main-repo file actually contains the new content.
       const mainContent = readFileSync(result.details.path, "utf-8");
@@ -912,9 +1044,7 @@ describe("lock-edit guard", () => {
 
       // The harness installs `tool_call` handlers via api.on. We need to
       // grab them and invoke directly. Check the per-event handler list.
-      const handlers = (harness as any).runEvent
-        ? null
-        : null;
+      const handlers = (harness as any).runEvent ? null : null;
       void handlers;
 
       // Use a tiny inline handler invocation by re-creating an api spy.
