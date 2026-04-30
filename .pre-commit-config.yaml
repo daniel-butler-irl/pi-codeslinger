@@ -43,3 +43,11 @@ repos:
         entry: npm test
         pass_filenames: false
         types: [ts]
+
+      - id: npm-install
+        name: Sync node_modules when package-lock.json changes
+        language: system
+        entry: npm install
+        pass_filenames: false
+        stages: [post-merge, post-checkout]
+        files: package-lock\.json
