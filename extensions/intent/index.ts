@@ -50,6 +50,7 @@ import { AgentOverlayComponent } from "../orchestrator/agent-overlay.js";
 import { getDriver } from "../orchestrator/index.js";
 import type { AgentRole } from "../orchestrator/state.js";
 import { generateFallbackTitle } from "./title-generator.js";
+import { makeIntentTools } from "./tools.js";
 
 /**
  * Wraps a child Component so it renders at a limited width but pads its
@@ -469,20 +470,26 @@ export default function (pi: ExtensionAPI) {
     if (!input.path) return;
 
     const absolutePath = normalize(resolve(cwdRef, input.path));
-    const match = store.intents.find(
-      (i) => normalize(intentContractPath(cwdRef, i.id)) === absolutePath,
-    );
-    if (!match) return;
 
-    if (match.phase !== "defining") {
-      return {
-        block: true,
-        reason:
-          `Intent contract is locked (phase: ${match.phase}). ` +
-          `The contract is immutable outside the defining phase. ` +
-          `If the contract needs to change, the user must amend it from the /intent menu.`,
-      };
-    }
+    // Match the canonical main-repo contract path for any tracked intent,
+    // OR any path that looks like .pi/intents/<id>/intent.md (worktree
+    // copy or otherwise). The contract is the single source of truth and
+    // must be written through `write_intent_contract` so path resolution
+    // stays correct regardless of which cwd the agent is in.
+    const isContractPath =
+      store.intents.some(
+        (i) => normalize(intentContractPath(cwdRef, i.id)) === absolutePath,
+      ) || /[\\/]\.pi[\\/]intents[\\/][^\\/]+[\\/]intent\.md$/.test(absolutePath);
+
+    if (!isContractPath) return;
+
+    return {
+      block: true,
+      reason:
+        "Intent contract files (intent.md) are not directly editable. " +
+        "Use the `write_intent_contract` tool to modify the contract — " +
+        "it resolves the correct main-repo path and enforces phase rules.",
+    };
   });
 
   // ── Agent overlay handler ──────────────────────────────────────────────────
@@ -592,327 +599,21 @@ export default function (pi: ExtensionAPI) {
 
   // ── /intent command ─────────────────────────────────────────────────────
 
-  pi.registerTool({
-    name: "update_understanding",
-    label: "Update Understanding",
-    description:
-      "Update the session's understanding of the current intent problem. " +
-      "This should capture: 1) current problem understanding, 2) key discoveries, " +
-      "3) next steps needed, 4) open questions. This persists across sessions.",
-    parameters: Type.Object({
-      understanding: Type.String({
-        description:
-          "Markdown-formatted summary of current problem understanding, " +
-          "next steps, and open questions. Should be concise but informative.",
-      }),
-    }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store, cwdRef);
-      if (!active) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "No active intent. Create or switch to an intent first.",
-            },
-          ],
-          isError: true,
-          details: undefined,
-        };
-      }
-      writeUnderstanding(cwdRef, active.id, params.understanding);
-      refreshPanel();
-
-      // Trigger re-injection since understanding changed
-      injectIntentContext();
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: "Understanding updated and will persist across sessions.",
-          },
-        ],
-        isError: false,
-        details: undefined,
-      };
+  // Register the canonical intent tool surface (shared with qq).
+  // gateAndCreateWorktree is forward-declared below.
+  for (const tool of makeIntentTools({
+    pi,
+    getCwd: () => cwdRef,
+    getStore: () => store,
+    refreshPanel,
+    injectIntentContext,
+    gateAndCreateWorktree: async (intent) => {
+      if (!sessionCtx) return null;
+      return gateAndCreateWorktree(sessionCtx, intent);
     },
-  });
-
-  pi.registerTool({
-    name: "read_intent",
-    label: "Read Intent",
-    description:
-      "Read the contract for the active intent. Returns the full content " +
-      "of the intent.md file (Description, Success Criteria, and Verification sections).",
-    parameters: Type.Object({}),
-    execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store, cwdRef);
-      if (!active) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "No active intent. Create or switch to an intent first.",
-            },
-          ],
-          isError: true,
-          details: undefined,
-        };
-      }
-      const content = loadIntentContent(cwdRef, active.id);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: content || "(Intent contract file is empty)",
-          },
-        ],
-        isError: false,
-        details: undefined,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "list_intents",
-    label: "List Intents",
-    description:
-      "List all intents in the project with their metadata (id, title, phase, " +
-      "parent relationship). Useful for understanding the intent tree structure, " +
-      "finding related work, or checking status.",
-    parameters: Type.Object({
-      filter: Type.Optional(
-        Type.Union(
-          [
-            Type.Literal("all"),
-            Type.Literal("active"),
-            Type.Literal("done"),
-            Type.Literal("children"),
-          ],
-          {
-            description:
-              'Filter: "all" (default), "active" (current intent only), ' +
-              '"done" (completed intents), "children" (children of current intent)',
-          },
-        ),
-      ),
-    }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const filter = params.filter ?? "all";
-      const intents = filterIntents(store, filter, cwdRef);
-      const currentActiveId = readActiveIntent(cwdRef);
-
-      if (intents.length === 0) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "No intents found matching the filter.",
-            },
-          ],
-          isError: false,
-          details: undefined,
-        };
-      }
-
-      const lines = intents.map((intent) => {
-        const active = intent.id === currentActiveId ? " [ACTIVE]" : "";
-        const parent = intent.parentId ? ` (child of ${intent.parentId})` : "";
-        return (
-          `- ${intent.title}${active}\n` +
-          `  ID: ${intent.id}\n` +
-          `  Phase: ${intent.phase}\n` +
-          `  Rework count: ${intent.reworkCount}${parent}`
-        );
-      });
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Found ${intents.length} intent(s):\n\n${lines.join("\n\n")}`,
-          },
-        ],
-        isError: false,
-        details: undefined,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "read_intent_log",
-    label: "Read Intent Log",
-    description:
-      "Read the append-only log for the active intent. The log contains " +
-      "discoveries, decisions, verification results, review findings, and " +
-      "other timestamped events from the intent's lifecycle.",
-    parameters: Type.Object({}),
-    execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store, cwdRef);
-      if (!active) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "No active intent. Create or switch to an intent first.",
-            },
-          ],
-          isError: true,
-          details: undefined,
-        };
-      }
-      const content = readLog(cwdRef, active.id);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: content || "(Log is empty)",
-          },
-        ],
-        isError: false,
-        details: undefined,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "read_intent_understanding",
-    label: "Read Intent Understanding",
-    description:
-      "Read the understanding file for the active intent. This contains " +
-      "the session's current problem understanding, key discoveries, next " +
-      "steps needed, and open questions.",
-    parameters: Type.Object({}),
-    execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store, cwdRef);
-      if (!active) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "No active intent. Create or switch to an intent first.",
-            },
-          ],
-          isError: true,
-          details: undefined,
-        };
-      }
-      const content = readUnderstanding(cwdRef, active.id);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: content || "(Understanding file is empty)",
-          },
-        ],
-        isError: false,
-        details: undefined,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "read_verification_results",
-    label: "Read Verification Results",
-    description:
-      "Read the cached verification results for the active intent. Shows " +
-      "which commands passed or failed in the most recent verification run, " +
-      "with exit codes and output.",
-    parameters: Type.Object({}),
-    execute: async (_toolCallId, _params, _signal, _onUpdate, _ctx) => {
-      const active = getActiveIntent(store, cwdRef);
-      if (!active) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "No active intent. Create or switch to an intent first.",
-            },
-          ],
-          isError: true,
-          details: undefined,
-        };
-      }
-      const result = readVerification(cwdRef, active.id);
-      if (!result) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "No verification results available yet.",
-            },
-          ],
-          isError: false,
-          details: undefined,
-        };
-      }
-
-      const summary = `Verification ran at: ${result.ranAt}\nOverall: ${
-        result.passed ? "PASSED" : "FAILED"
-      }\n\n`;
-      const commands = result.commands
-        .map(
-          (cmd) =>
-            `Command: ${cmd.command}\n` +
-            `Status: ${cmd.passed ? "✓ PASS" : "✗ FAIL"} (exit ${cmd.exitCode})\n` +
-            (cmd.output ? `Output:\n${cmd.output}\n` : ""),
-        )
-        .join("\n");
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: summary + commands,
-          },
-        ],
-        isError: false,
-        details: undefined,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "switch_intent",
-    label: "Switch Intent",
-    description:
-      "Switch the active intent to a different intent by ID. This changes which " +
-      "intent's contract, understanding, and tools are active.",
-    parameters: Type.Object({
-      intentId: Type.String({
-        description: "The ID of the intent to switch to",
-      }),
-    }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const intent = store.intents.find((i) => i.id === params.intentId);
-      if (!intent) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `No intent found with ID: ${params.intentId}`,
-            },
-          ],
-          isError: true,
-          details: undefined,
-        };
-      }
-      writeActiveIntent(cwdRef, intent.id);
-      await persist(cwdRef);
-      pi.events.emit("intent:active-changed", { id: intent.id });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Switched to intent: ${intent.title} (${intent.id})\nPhase: ${intent.phase}`,
-          },
-        ],
-        isError: false,
-        details: undefined,
-      };
-    },
-  });
+  })) {
+    pi.registerTool(tool);
+  }
 
   pi.registerTool({
     name: "propose_done",

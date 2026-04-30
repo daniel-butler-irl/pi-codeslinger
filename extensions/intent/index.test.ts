@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -52,6 +52,10 @@ async function loadIntentExtension() {
     .replaceAll(
       "./lock.js",
       new URL("./lock.ts", import.meta.url).href,
+    )
+    .replaceAll(
+      "./tools.js",
+      new URL("./tools.ts", import.meta.url).href,
     )
     .replaceAll(
       "../orchestrator/agent-overlay.js",
@@ -609,3 +613,393 @@ describe("Gap 3 — propose_done blocks on stale or missing understanding.md", (
     }
   });
 });
+
+describe("write_intent_contract tool", () => {
+  test("writes provided sections and refuses with wrong phase", async () => {
+    const { dir, cleanup } = initGitRepo();
+    try {
+      const store = loadStore(dir);
+      const intent = createIntent(store, dir, "wic test");
+      await saveStore(dir, store);
+      const { writeActiveIntent } = await import("./active-local.ts");
+      writeActiveIntent(dir, intent.id);
+
+      const harness = await createHarness(dir);
+      await harness.runEvent("session_start");
+      const tool = harness.tools.get("write_intent_contract");
+      assert.ok(tool);
+
+      // Successful write
+      const result = await tool.execute(
+        "call",
+        {
+          description: "Refactor login.",
+          successCriteria: "All login tests pass.",
+          verification: "Run npm test.",
+        },
+        undefined,
+        undefined,
+        harness.ctx,
+      );
+      assert.equal(result.isError, false);
+      assert.deepEqual(result.details.written, [
+        "Description",
+        "Success Criteria",
+        "Verification",
+      ]);
+      const { loadIntentContent } = await import("./store.ts");
+      const updated = loadIntentContent(dir, intent.id);
+      assert.match(updated, /Refactor login\./);
+      assert.match(updated, /All login tests pass\./);
+      assert.match(updated, /Run npm test\./);
+      // Path is in the main repo (compare via realpath to dodge /private prefix on macOS)
+      const dirReal = realpathSync(dir);
+      assert.ok(
+        realpathSync(result.details.path).startsWith(dirReal),
+        `expected path under ${dirReal}, got ${result.details.path}`,
+      );
+
+      // After lock (phase != defining), refuses
+      const { transitionPhase } = await import("./store.ts");
+      transitionPhase(store, intent.id, "implementing");
+      await saveStore(dir, store);
+      // Reload harness so it picks up the new phase
+      const harness2 = await createHarness(dir);
+      await harness2.runEvent("session_start");
+      const tool2 = harness2.tools.get("write_intent_contract");
+      const refused = await tool2.execute(
+        "call",
+        { description: "nope" },
+        undefined,
+        undefined,
+        harness2.ctx,
+      );
+      assert.equal(refused.isError, true);
+      assert.match(refused.content[0].text, /locked/i);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("from a worktree cwd, writes to the main repo path", async () => {
+    const { dir, cleanup } = initGitRepo();
+    const wtBase = mkdtempSync(join(tmpdir(), "pi-wic-wt-base-"));
+    process.env.PI_WORKTREE_BASE = wtBase;
+    try {
+      // Create the intent in the main repo
+      const store = loadStore(dir);
+      const intent = createIntent(store, dir, "wic worktree test");
+      await saveStore(dir, store);
+
+      // Create a worktree for the intent and run the tool from there
+      const { createWorktree } = await import("./worktree-manager.ts");
+      const wt = createWorktree(dir, intent.title, intent.id);
+
+      // Make the intent active under the worktree's git-dir
+      const { writeActiveIntent } = await import("./active-local.ts");
+      writeActiveIntent(wt.path, intent.id);
+
+      const harness = await createHarness(wt.path);
+      await harness.runEvent("session_start");
+      const tool = harness.tools.get("write_intent_contract");
+      assert.ok(tool);
+
+      const result = await tool.execute(
+        "call",
+        {
+          description: "From worktree.",
+          successCriteria: "Path resolves to main.",
+          verification: "Verify file.",
+        },
+        undefined,
+        undefined,
+        harness.ctx,
+      );
+      assert.equal(result.isError, false);
+      // The written path lives under the MAIN repo, not the worktree.
+      const dirReal = realpathSync(dir);
+      const wtReal = realpathSync(wt.path);
+      const pathReal = realpathSync(result.details.path);
+      assert.ok(
+        pathReal.startsWith(dirReal),
+        `expected main-repo path under ${dirReal}, got ${pathReal}`,
+      );
+      assert.ok(
+        !pathReal.startsWith(wtReal),
+        "must not write into worktree",
+      );
+
+      // The main-repo file actually contains the new content.
+      const mainContent = readFileSync(result.details.path, "utf-8");
+      assert.match(mainContent, /From worktree\./);
+    } finally {
+      delete process.env.PI_WORKTREE_BASE;
+      rmSync(wtBase, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+});
+
+describe("lock_intent tool", () => {
+  test("returns structured missing list when sections are empty", async () => {
+    const { dir, cleanup } = initGitRepo();
+    try {
+      const store = loadStore(dir);
+      const intent = createIntent(store, dir, "lock missing test");
+      await saveStore(dir, store);
+      const { writeActiveIntent } = await import("./active-local.ts");
+      writeActiveIntent(dir, intent.id);
+
+      const harness = await createHarness(dir);
+      await harness.runEvent("session_start");
+      const tool = harness.tools.get("lock_intent");
+      assert.ok(tool);
+
+      const result = await tool.execute(
+        "call",
+        { createWorktree: false },
+        undefined,
+        undefined,
+        harness.ctx,
+      );
+      assert.equal(result.isError, true);
+      assert.equal(result.details.ok, false);
+      assert.deepEqual(result.details.missing, [
+        "Success Criteria",
+        "Verification",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("locks successfully without a worktree when createWorktree=false", async () => {
+    const { dir, cleanup } = initGitRepo();
+    try {
+      const store = loadStore(dir);
+      const intent = createIntent(store, dir, "lock ok test");
+      saveIntentContent(dir, intent.id, VALID_INTENT_CONTENT);
+      await saveStore(dir, store);
+      const { writeActiveIntent } = await import("./active-local.ts");
+      writeActiveIntent(dir, intent.id);
+
+      const harness = await createHarness(dir);
+      await harness.runEvent("session_start");
+      const tool = harness.tools.get("lock_intent");
+
+      const result = await tool.execute(
+        "call",
+        { createWorktree: false },
+        undefined,
+        undefined,
+        harness.ctx,
+      );
+      assert.equal(result.isError, false);
+      assert.equal(result.details.ok, true);
+      assert.equal(result.details.phase, "implementing");
+      assert.equal(result.details.worktreePath, undefined);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("refuses when phase is not defining", async () => {
+    const { dir, cleanup } = initGitRepo();
+    try {
+      const store = loadStore(dir);
+      const intent = createIntent(store, dir, "lock wrong phase");
+      saveIntentContent(dir, intent.id, VALID_INTENT_CONTENT);
+      const { transitionPhase } = await import("./store.ts");
+      transitionPhase(store, intent.id, "implementing");
+      await saveStore(dir, store);
+      const { writeActiveIntent } = await import("./active-local.ts");
+      writeActiveIntent(dir, intent.id);
+
+      const harness = await createHarness(dir);
+      await harness.runEvent("session_start");
+      const tool = harness.tools.get("lock_intent");
+      const result = await tool.execute(
+        "call",
+        { createWorktree: false },
+        undefined,
+        undefined,
+        harness.ctx,
+      );
+      assert.equal(result.isError, true);
+      assert.equal(result.details.ok, false);
+      assert.match(result.content[0].text, /already locked/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("transition_phase tool", () => {
+  test("legal transition succeeds and emits intent:phase-changed", async () => {
+    const { dir, cleanup } = initGitRepo();
+    try {
+      const store = loadStore(dir);
+      const intent = createIntent(store, dir, "tp ok");
+      saveIntentContent(dir, intent.id, VALID_INTENT_CONTENT);
+      const { transitionPhase } = await import("./store.ts");
+      transitionPhase(store, intent.id, "implementing");
+      await saveStore(dir, store);
+      const { writeActiveIntent } = await import("./active-local.ts");
+      writeActiveIntent(dir, intent.id);
+
+      const harness = await createHarness(dir);
+      await harness.runEvent("session_start");
+      const tool = harness.tools.get("transition_phase");
+      assert.ok(tool);
+
+      const result = await tool.execute(
+        "call",
+        { toPhase: "reviewing" },
+        undefined,
+        undefined,
+        harness.ctx,
+      );
+      assert.equal(result.isError, false);
+      assert.equal(result.details.ok, true);
+      assert.equal(result.details.to, "reviewing");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("illegal transition returns structured error", async () => {
+    const { dir, cleanup } = initGitRepo();
+    try {
+      const store = loadStore(dir);
+      const intent = createIntent(store, dir, "tp illegal");
+      await saveStore(dir, store);
+      const { writeActiveIntent } = await import("./active-local.ts");
+      writeActiveIntent(dir, intent.id);
+
+      const harness = await createHarness(dir);
+      await harness.runEvent("session_start");
+      const tool = harness.tools.get("transition_phase");
+
+      // defining -> done is not legal
+      const result = await tool.execute(
+        "call",
+        { toPhase: "done" },
+        undefined,
+        undefined,
+        harness.ctx,
+      );
+      assert.equal(result.isError, true);
+      assert.equal(result.details.ok, false);
+      assert.match(result.details.reason, /Illegal phase transition/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("lock-edit guard", () => {
+  test("blocks Edit/Write on intent.md regardless of phase", async () => {
+    const { dir, cleanup } = initGitRepo();
+    try {
+      const store = loadStore(dir);
+      const intent = createIntent(store, dir, "guard test");
+      await saveStore(dir, store);
+      const { writeActiveIntent } = await import("./active-local.ts");
+      writeActiveIntent(dir, intent.id);
+
+      const harness = await createHarness(dir);
+      await harness.runEvent("session_start");
+
+      // The harness installs `tool_call` handlers via api.on. We need to
+      // grab them and invoke directly. Check the per-event handler list.
+      const handlers = (harness as any).runEvent
+        ? null
+        : null;
+      void handlers;
+
+      // Use a tiny inline handler invocation by re-creating an api spy.
+      // Instead, easier: invoke the tool_call hook by looking at all
+      // handlers registered on the underlying api. Recreate harness with
+      // our own probe.
+      const probe = await createGuardHarness(dir);
+      const { intentContractPath } = await import("./store.ts");
+      const path = intentContractPath(dir, intent.id);
+
+      // Phase is `defining` — guard must still block.
+      const definingResult = await probe.runToolCall({
+        toolName: "edit",
+        input: { path },
+      });
+      assert.ok(definingResult);
+      assert.equal(definingResult.block, true);
+      assert.match(definingResult.reason, /write_intent_contract/);
+
+      // After lock, still blocked.
+      const { transitionPhase } = await import("./store.ts");
+      transitionPhase(store, intent.id, "implementing");
+      await saveStore(dir, store);
+      const probe2 = await createGuardHarness(dir);
+      const lockedResult = await probe2.runToolCall({
+        toolName: "write",
+        input: { path },
+      });
+      assert.equal(lockedResult.block, true);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+async function createGuardHarness(cwd: string) {
+  const tools = new Map<string, any>();
+  const handlers = new Map<string, Function[]>();
+  const eventHandlers = new Map<string, Array<(payload: unknown) => void>>();
+
+  const api = {
+    on(event: string, handler: Function) {
+      const list = handlers.get(event) ?? [];
+      list.push(handler);
+      handlers.set(event, list);
+    },
+    registerTool(options: any) {
+      tools.set(options.name, options);
+    },
+    registerShortcut() {},
+    registerCommand() {},
+    sendMessage() {},
+    events: {
+      on(event: string, handler: (payload: unknown) => void) {
+        const list = eventHandlers.get(event) ?? [];
+        list.push(handler);
+        eventHandlers.set(event, list);
+      },
+      emit(event: string, payload: unknown) {
+        for (const h of eventHandlers.get(event) ?? []) h(payload);
+      },
+    },
+  } as unknown as ExtensionAPI;
+
+  const { default: intentExtension } = await loadIntentExtension();
+  intentExtension(api);
+
+  const ctx = {
+    cwd,
+    hasUI: true,
+    ui: { custom() {}, notify() {} },
+  } as unknown as ExtensionContext;
+
+  // Run session_start so the store is populated in-memory.
+  for (const h of handlers.get("session_start") ?? []) {
+    await h({}, ctx);
+  }
+
+  async function runToolCall(event: any) {
+    let last: unknown = undefined;
+    for (const h of handlers.get("tool_call") ?? []) {
+      last = await h(event, ctx);
+    }
+    return last as any;
+  }
+
+  return { runToolCall };
+}

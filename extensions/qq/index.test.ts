@@ -468,15 +468,17 @@ describe("qq extension", () => {
         options.customTools.map((tool: any) => tool.name),
         [
           "create_intent",
-          "update_understanding",
+          "delete_intent",
           "read_intent",
           "list_intents",
           "read_intent_log",
           "read_intent_understanding",
           "read_verification_results",
+          "update_understanding",
           "switch_intent",
+          "write_intent_contract",
           "lock_intent",
-          "delete_intent",
+          "transition_phase",
         ],
       );
       assert.ok(options.sessionManager);
