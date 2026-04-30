@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   makeProposeDoneTool,
   makeReportReviewTool,
+  makeReportStatusTool,
   makeAskOrchestratorTool,
   makeSpawnChildIntentTool,
   protocolToolsForRole,
@@ -172,6 +173,113 @@ describe("spawn_child_intent tool", () => {
       assert.equal(flight.pendingSignal.agentRole, "implementer");
     } else {
       assert.fail("expected spawn-child signal");
+    }
+  });
+});
+
+describe("protocol tools no-flight handling", () => {
+  const NO_FLIGHT_TEXT =
+    "No active flight: this tool only works inside an orchestrator-managed " +
+    "subagent session. Did you mean to call something else?";
+
+  test("propose_done returns structured error when flight is null", async () => {
+    const tool = makeProposeDoneTool(null, "implementer");
+    const result = await tool.execute(
+      "c",
+      { summary: "done" },
+      noSignal,
+      noOp,
+      noCtx,
+    );
+    assert.equal((result as any).isError, true);
+    assert.equal((result as any).details, undefined);
+    assert.equal((result.content[0] as any).text, NO_FLIGHT_TEXT);
+  });
+
+  test("report_review returns structured error when flight is null", async () => {
+    const tool = makeReportReviewTool(null);
+    const result = await tool.execute(
+      "c",
+      { verdict: "pass", findings: [] },
+      noSignal,
+      noOp,
+      noCtx,
+    );
+    assert.equal((result as any).isError, true);
+    assert.equal((result as any).details, undefined);
+    assert.equal((result.content[0] as any).text, NO_FLIGHT_TEXT);
+  });
+
+  test("report_status returns structured error when flight is null", async () => {
+    const tool = makeReportStatusTool(null);
+    const result = await tool.execute(
+      "c",
+      { message: "checking" },
+      noSignal,
+      noOp,
+      noCtx,
+    );
+    assert.equal((result as any).isError, true);
+    assert.equal((result as any).details, undefined);
+    assert.equal((result.content[0] as any).text, NO_FLIGHT_TEXT);
+  });
+
+  test("ask_orchestrator returns structured error when flight is null", async () => {
+    const tool = makeAskOrchestratorTool(null, "implementer");
+    const result = await tool.execute(
+      "c",
+      { question: "?" },
+      noSignal,
+      noOp,
+      noCtx,
+    );
+    assert.equal((result as any).isError, true);
+    assert.equal((result as any).details, undefined);
+    assert.equal((result.content[0] as any).text, NO_FLIGHT_TEXT);
+  });
+
+  test("spawn_child_intent returns structured error when flight is null", async () => {
+    const tool = makeSpawnChildIntentTool(null, "implementer");
+    const result = await tool.execute(
+      "c",
+      { description: "do thing", reason: "blocking" },
+      noSignal,
+      noOp,
+      noCtx,
+    );
+    assert.equal((result as any).isError, true);
+    assert.equal((result as any).details, undefined);
+    assert.equal((result.content[0] as any).text, NO_FLIGHT_TEXT);
+  });
+
+  test("no-flight execute does not throw and does not mutate", async () => {
+    // Sanity: each null-flight tool just returns the error without side effects.
+    const tools = [
+      makeProposeDoneTool(null, "implementer"),
+      makeReportReviewTool(null),
+      makeReportStatusTool(null),
+      makeAskOrchestratorTool(null, "implementer"),
+      makeSpawnChildIntentTool(null, "implementer"),
+    ];
+    for (const t of tools) {
+      // Pass a permissive params object — the no-flight guard short-circuits
+      // before params are read.
+      const r = await t.execute(
+        "c",
+        {
+          summary: "x",
+          verdict: "pass",
+          findings: [],
+          message: "x",
+          question: "x",
+          description: "x",
+          reason: "x",
+        },
+        noSignal,
+        noOp,
+        noCtx,
+      );
+      assert.equal((r as any).isError, true);
     }
   });
 });

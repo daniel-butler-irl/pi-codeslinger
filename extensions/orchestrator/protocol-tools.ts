@@ -24,19 +24,36 @@ function ack(text: string) {
 }
 
 /**
+ * Structured error returned by protocol tools when no active flight is
+ * present. Protocol tools mutate flight state; without a flight there is
+ * no state to mutate, so they refuse instead of silently no-op-ing.
+ */
+const NO_FLIGHT_MESSAGE =
+  "No active flight: this tool only works inside an orchestrator-managed " +
+  "subagent session. Did you mean to call something else?";
+
+function noFlightError() {
+  return {
+    content: [{ type: "text" as const, text: NO_FLIGHT_MESSAGE }],
+    isError: true,
+    details: undefined,
+  };
+}
+
+/**
  * `propose_done` — the agent believes its work is complete.
  * The orchestrator will decide whether to accept (advancing the phase)
  * or reject (coming back through the agent's next prompt).
  */
 export function makeProposeDoneTool(
-  flight: IntentFlight,
+  flight: IntentFlight | null,
   role: AgentRole,
 ): ToolDefinition {
   return {
     name: "propose_done",
     label: "Propose done",
     description:
-      `Propose that your work on intent ${flight.intentId} is complete. ` +
+      `Propose that your work on intent ${flight?.intentId ?? "(no active flight)"} is complete. ` +
       `The orchestrator will review your proposal and either accept it or ` +
       `send you back for more work. Do not call this until you have made ` +
       `concrete evidence available (edits applied, log entries appended, ` +
@@ -55,6 +72,7 @@ export function makeProposeDoneTool(
       ),
     }),
     async execute(_toolCallId, rawParams) {
+      if (!flight) return noFlightError();
       const params = rawParams as { summary: string; artifacts?: string[] };
       flight.pendingSignal = {
         kind: "proposal",
@@ -77,12 +95,14 @@ export function makeProposeDoneTool(
  * Does NOT set pendingSignal; the reviewer session keeps running after
  * calling this. The driver wires flight.onStatus to emit an event to the UI.
  */
-export function makeReportStatusTool(flight: IntentFlight): ToolDefinition {
+export function makeReportStatusTool(
+  flight: IntentFlight | null,
+): ToolDefinition {
   return {
     name: "report_status",
     label: "Report status",
     description:
-      `Push a brief live status update while reviewing intent ${flight.intentId}. ` +
+      `Push a brief live status update while reviewing intent ${flight?.intentId ?? "(no active flight)"}. ` +
       `Use short phrases ("Checking test coverage", "Reading contract", ` +
       `"Inspecting changed files"). Do not use this to report findings — ` +
       `use report_review for that. Call this freely as you work.`,
@@ -93,6 +113,7 @@ export function makeReportStatusTool(flight: IntentFlight): ToolDefinition {
       }),
     }),
     async execute(_toolCallId, rawParams) {
+      if (!flight) return noFlightError();
       const params = rawParams as { message: string };
       flight.onStatus?.(params.message);
       return ack("Status noted.");
@@ -103,12 +124,14 @@ export function makeReportStatusTool(flight: IntentFlight): ToolDefinition {
 /**
  * `report_review` — the reviewer's structured verdict.
  */
-export function makeReportReviewTool(flight: IntentFlight): ToolDefinition {
+export function makeReportReviewTool(
+  flight: IntentFlight | null,
+): ToolDefinition {
   return {
     name: "report_review",
     label: "Report review",
     description:
-      `Submit your adversarial review verdict for intent ${flight.intentId}. ` +
+      `Submit your adversarial review verdict for intent ${flight?.intentId ?? "(no active flight)"}. ` +
       `Use "pass" only if you have actively tried to find problems and ` +
       `could not. Use "rework" if anything is unclear, shallow, or ` +
       `unverified — include concrete findings.`,
@@ -134,6 +157,7 @@ export function makeReportReviewTool(flight: IntentFlight): ToolDefinition {
       ),
     }),
     async execute(_toolCallId, rawParams) {
+      if (!flight) return noFlightError();
       const params = rawParams as {
         verdict: "pass" | "rework";
         summary: string;
@@ -169,7 +193,7 @@ export function makeReportReviewTool(flight: IntentFlight): ToolDefinition {
  * prompt().
  */
 export function makeAskOrchestratorTool(
-  flight: IntentFlight,
+  flight: IntentFlight | null,
   role: AgentRole,
 ): ToolDefinition {
   return {
@@ -188,6 +212,7 @@ export function makeAskOrchestratorTool(
       ),
     }),
     async execute(_toolCallId, rawParams) {
+      if (!flight) return noFlightError();
       const params = rawParams as { question: string; context?: string };
       flight.pendingSignal = {
         kind: "question",
@@ -429,7 +454,7 @@ export function makeReadVerificationResultsTool(
  * parent (blocked-on-child) until the child reaches done.
  */
 export function makeSpawnChildIntentTool(
-  flight: IntentFlight,
+  flight: IntentFlight | null,
   role: AgentRole,
 ): ToolDefinition {
   return {
@@ -437,7 +462,7 @@ export function makeSpawnChildIntentTool(
     label: "Spawn child intent",
     description:
       `Propose a child intent for a prerequisite that blocks progress ` +
-      `on intent ${flight.intentId}. Example: a verification command ` +
+      `on intent ${flight?.intentId ?? "(no active flight)"}. Example: a verification command ` +
       `references tests that do not yet exist — the child intent is ` +
       `"create those tests". The orchestrator will pause this intent ` +
       `until the child is done. Use sparingly; prefer completing the ` +
@@ -455,6 +480,7 @@ export function makeSpawnChildIntentTool(
       }),
     }),
     async execute(_toolCallId, rawParams) {
+      if (!flight) return noFlightError();
       const params = rawParams as { description: string; reason: string };
       flight.pendingSignal = {
         kind: "spawn-child",
